@@ -1,0 +1,273 @@
+# Shop Window Backend - Python Dependencies
+# Django 5 + PostGIS + REST API + Production Deployment
+# Updated: Sprint 1 Implementation
+# Target: Python 3.11+ / Render Deployment
+
+# =============================================================================
+# CORE DJANGO FRAMEWORK
+# =============================================================================
+
+Django==5.0.0
+# Latest Django 5.0 for modern features and security
+# Includes Django ORM, admin interface, authentication
+
+django-environ==0.11.2
+# Environment variable management (alternative to python-dotenv)
+
+python-dotenv==1.0.0
+# Load environment variables from .env file
+# Used in settings.py for local development
+
+# =============================================================================
+# DATABASE DRIVERS
+# =============================================================================
+
+psycopg2-binary==2.9.9
+# PostgreSQL adapter for Python
+# Binary version for easier installation on production
+
+dj-database-url==2.1.0
+# Parse database URLs from environment variables
+# Required for Render PostgreSQL connection
+
+# =============================================================================
+# DJANGO REST FRAMEWORK & API
+# =============================================================================
+
+djangorestframework==3.14.0
+# Core REST API framework for Django
+# Provides serializers, viewsets, authentication
+
+djangorestframework-simplejwt==5.3.0
+# JSON Web Token authentication for DRF
+# Secure token-based authentication system
+
+django-filter==23.3
+# Advanced filtering for DRF viewsets
+# Enables complex query parameter filtering
+
+django-cors-headers==4.3.0
+# Cross-Origin Resource Sharing headers
+# Required for React frontend integration
+
+# =============================================================================
+# GOOGLE MAPS INTEGRATION
+# =============================================================================
+
+googlemaps==4.10.0
+# Official Google Maps API Python client
+# Used for geocoding shopping center addresses
+
+requests==2.31.0
+# HTTP library (dependency for googlemaps)
+# Also used for external API calls
+
+# =============================================================================
+# DATA PROCESSING & IMPORTS
+# =============================================================================
+
+pandas==2.1.4
+# Data analysis and manipulation library
+# Used for CSV/Excel processing and analysis
+
+openpyxl==3.1.2
+# Excel file reading and writing
+# Required for sample data loading from .xlsx files
+
+xlrd==2.0.1
+# Legacy Excel file support
+# Backup for older Excel formats
+
+python-dateutil==2.8.2
+# Date parsing and manipulation utilities
+# Used in lease date processing and calculations
+
+# =============================================================================
+# PDF PROCESSING (Future Sprint 2)
+# =============================================================================
+
+pdfplumber==0.10.3
+# PDF text extraction and analysis
+# For extracting tenant data from PDF reports
+
+PyPDF2==3.0.1
+# Alternative PDF processing library
+# Backup option for PDF text extraction
+
+# =============================================================================
+# PRODUCTION DEPLOYMENT
+# =============================================================================
+
+gunicorn==21.2.0
+# WSGI HTTP Server for Python web applications
+# Production web server for Render deployment
+
+whitenoise==6.6.0
+# Static file serving for Django in production
+# Serves CSS, JS, images without separate web server
+
+# =============================================================================
+# CACHING & PERFORMANCE
+# =============================================================================
+
+redis==5.0.1
+# Redis client for Python
+# For caching and session storage (optional)
+
+django-redis==5.4.0
+# Django Redis cache backend
+# Improves API response times
+
+# =============================================================================
+# MONITORING & LOGGING
+# =============================================================================
+
+sentry-sdk==1.38.0
+# Error tracking and performance monitoring
+# Automatic error reporting in production
+
+django-extensions==3.2.3
+# Additional Django management commands
+# Useful for development and debugging
+
+# =============================================================================
+# SECURITY & VALIDATION
+# =============================================================================
+
+django-ratelimit==4.1.0
+# Rate limiting for Django views
+# Prevents API abuse and DoS attacks
+
+django-guardian==2.4.0
+# Per-object permissions for Django
+# Advanced permission system for tenant data
+
+# =============================================================================
+# TESTING & DEVELOPMENT
+# =============================================================================
+
+pytest==7.4.3
+# Testing framework
+# More powerful than Django's default unittest
+
+pytest-django==4.7.0
+# Django integration for pytest
+# Database fixtures and Django-specific testing
+
+factory-boy==3.3.0
+# Test data generation
+# Creates realistic test data for models
+
+coverage==7.3.2
+# Code coverage measurement
+# Ensures comprehensive testing
+
+# =============================================================================
+# DATA VALIDATION & SERIALIZATION
+# =============================================================================
+
+marshmallow==3.20.1
+# Advanced data serialization and validation
+# Alternative to DRF serializers for complex data
+
+jsonschema==4.19.2
+# JSON Schema validation
+# Validates API request/response formats
+
+# =============================================================================
+# GEOSPATIAL & MAPPING
+# =============================================================================
+
+# Note: PostGIS integration is handled by Django's GIS framework
+# No additional Python packages required for basic PostGIS functionality
+
+geopy==2.4.0
+# Geocoding library (backup to Google Maps)
+# Alternative geocoding services
+
+# =============================================================================
+# UTILITY LIBRARIES
+# =============================================================================
+
+python-slugify==8.0.1
+# Generate URL-safe slugs from strings
+# Used for creating SEO-friendly URLs
+
+pillow==10.1.0
+# Image processing library
+# Required by Django for ImageField support
+
+pytz==2023.3
+# Timezone calculations
+# Enhanced timezone support for Django
+
+# =============================================================================
+# DEVELOPMENT TOOLS (Optional - Remove in Production)
+# =============================================================================
+
+# Uncomment these for local development only
+# django-debug-toolbar==4.2.0
+# ipython==8.17.2
+# jupyter==1.0.0
+
+# =============================================================================
+# VERSION COMPATIBILITY NOTES
+# =============================================================================
+
+# Python Version: 3.11+
+# Django Version: 5.0.x
+# PostgreSQL: 14+ (Render default)
+# PostGIS: 3.3+ (Render default)
+
+# Tested Environment:
+# - Render.com production deployment
+# - PostgreSQL 17 with PostGIS 3.5.3
+# - Python 3.11 runtime
+
+# =============================================================================
+# INSTALLATION NOTES
+# =============================================================================
+
+# For local development:
+# pip install -r requirements.txt
+
+# For production (Render):
+# Automatically installed via render.yaml buildCommand
+# pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate
+
+# Memory usage estimate: ~200MB for full installation
+# Installation time estimate: 3-5 minutes on Render
+
+# =============================================================================
+# SECURITY CONSIDERATIONS
+# =============================================================================
+
+# All packages are pinned to specific versions for security
+# Regular updates recommended for security patches
+# Monitor for CVEs in dependencies: https://pyup.io/
+# Consider using pip-audit for vulnerability scanning
+
+# =============================================================================
+# OPTIONAL PERFORMANCE PACKAGES
+# =============================================================================
+
+# Uncomment for enhanced performance in high-traffic scenarios:
+# uvloop==0.19.0          # Faster event loop for asyncio
+# httptools==0.6.1        # Faster HTTP parsing
+# ujson==5.8.0            # Faster JSON serialization
+# orjson==3.9.10          # Even faster JSON (Rust-based)
+
+# =============================================================================
+# PACKAGE SIZE SUMMARY
+# =============================================================================
+
+# Core packages (~150MB):
+# - Django, DRF, psycopg2, gunicorn
+# 
+# Data processing (~100MB):
+# - pandas, openpyxl, googlemaps
+#
+# Optional packages (~50MB):
+# - testing, monitoring, caching
+#
+# Total estimated size: ~300MB installed

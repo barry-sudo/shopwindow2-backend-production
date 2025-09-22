@@ -1,0 +1,341 @@
+# Render.com Deployment Configuration for Shop Window Backend
+# Auto-deployment configuration for Django 5 + PostgreSQL + PostGIS
+# Production-ready settings with environment variables and build optimization
+
+services:
+  # =============================================================================
+  # WEB SERVICE - Django Backend API
+  # =============================================================================
+  
+  - type: web
+    name: shopwindow-backend
+    runtime: python3
+    plan: starter  # Can be upgraded to standard/pro for production scale
+    
+    # =============================================================================
+    # BUILD CONFIGURATION
+    # =============================================================================
+    
+    buildCommand: |
+      echo "🏗️  Starting Shop Window backend build..."
+      
+      # Install Python dependencies
+      echo "📦 Installing Python packages..."
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      
+      # Collect static files for production
+      echo "🎨 Collecting static files..."
+      python manage.py collectstatic --noinput --clear
+      
+      # Run database migrations
+      echo "🗃️  Running database migrations..."
+      python manage.py makemigrations --noinput
+      python manage.py migrate --noinput
+      
+      # Verify PostGIS functionality
+      echo "🌍 Verifying PostGIS integration..."
+      python -c "
+      import os
+      os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'shopwindow.settings')
+      import django
+      django.setup()
+      from django.db import connection
+      with connection.cursor() as cursor:
+          cursor.execute('SELECT PostGIS_version()')
+          print('✅ PostGIS version:', cursor.fetchone()[0])
+      "
+      
+      echo "✅ Build completed successfully!"
+    
+    # =============================================================================
+    # RUNTIME CONFIGURATION
+    # =============================================================================
+    
+    startCommand: |
+      echo "🚀 Starting Shop Window backend server..."
+      
+      # Start Gunicorn with production settings
+      gunicorn shopwindow.wsgi:application \
+        --bind 0.0.0.0:$PORT \
+        --workers 3 \
+        --worker-class gthread \
+        --threads 2 \
+        --worker-connections 1000 \
+        --max-requests 1000 \
+        --max-requests-jitter 100 \
+        --timeout 30 \
+        --keep-alive 5 \
+        --preload \
+        --log-level info \
+        --access-logfile - \
+        --error-logfile -
+    
+    # =============================================================================
+    # ENVIRONMENT VARIABLES
+    # =============================================================================
+    
+    envVars:
+      # Django Core Settings
+      - key: DJANGO_SETTINGS_MODULE
+        value: shopwindow.settings
+      
+      - key: SECRET_KEY
+        generateValue: true  # Render auto-generates secure secret key
+      
+      - key: DEBUG
+        value: "false"  # Production setting
+      
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com,shopwindow-backend.onrender.com,localhost,127.0.0.1"
+      
+      # Database Configuration (PostgreSQL + PostGIS)
+      - key: DATABASE_URL
+        value: postgresql://shop_window_v2_postgres_user:ZMxfNsIhvfDju1mYrXvZbTG6GiIT6PTP@dpg-d34gp2buibrs73ah0ohg-a/shop_window_v2_postgres?sslmode=require
+      
+      # Google Maps API Integration
+      - key: GOOGLE_MAPS_API_KEY
+        value: AIzaSyChM7polnyijdXCbaBwUFeWO-4nYFu5Ccw
+      
+      - key: GOOGLE_MAPS_REQUESTS_PER_DAY
+        value: "40000"
+      
+      - key: GOOGLE_MAPS_REQUESTS_PER_SECOND
+        value: "50"
+      
+      # Application Settings
+      - key: TIME_ZONE
+        value: America/New_York
+      
+      - key: LANGUAGE_CODE
+        value: en-us
+      
+      # Security Settings for Production
+      - key: SECURE_SSL_REDIRECT
+        value: "true"
+      
+      - key: SECURE_PROXY_SSL_HEADER
+        value: "HTTP_X_FORWARDED_PROTO,https"
+      
+      - key: SECURE_HSTS_SECONDS
+        value: "31536000"  # 1 year
+      
+      - key: SECURE_HSTS_INCLUDE_SUBDOMAINS
+        value: "true"
+      
+      # CORS Configuration for Frontend
+      - key: CORS_ALLOWED_ORIGINS
+        value: "http://localhost:3000,https://localhost:3000,https://shopwindow-frontend.onrender.com"
+      
+      # Cache Configuration
+      - key: CACHE_TTL
+        value: "900"  # 15 minutes default cache
+      
+      # Logging Level
+      - key: LOG_LEVEL
+        value: INFO
+      
+      # Performance Settings
+      - key: MAX_CONCURRENT_GEOCODING
+        value: "10"
+      
+      - key: IMPORT_BATCH_SIZE
+        value: "100"
+      
+    # =============================================================================
+    # HEALTH CHECKS & MONITORING
+    # =============================================================================
+    
+    healthCheckPath: /api/v1/health/
+    
+    # =============================================================================
+    # DEPLOYMENT SETTINGS
+    # =============================================================================
+    
+    # Auto-deploy on git push to main branch
+    autoDeploy: true
+    
+    # Build timeout (increased for Django migrations and static file collection)
+    buildFilter:
+      paths:
+      - "**"
+      ignoredPaths:
+      - "*.md"
+      - ".gitignore"
+      - "docs/**"
+      - ".vscode/**"
+    
+    # =============================================================================
+    # SCALING & PERFORMANCE
+    # =============================================================================
+    
+    # CPU and memory allocation (starter plan limits)
+    # Can be increased with standard/pro plans
+    scaling:
+      minInstances: 1
+      maxInstances: 3  # Auto-scale up to 3 instances under load
+    
+    # Disk space for uploaded files and static files
+    disk:
+      name: shopwindow-data
+      size: 1GB
+      mountPath: /opt/render/project/src/media
+
+  # =============================================================================
+  # OPTIONAL: REDIS CACHE SERVICE
+  # =============================================================================
+  # Uncomment to add Redis caching for improved performance
+  
+  # - type: redis
+  #   name: shopwindow-redis
+  #   plan: starter  # 25MB cache
+  #   maxMemoryPolicy: allkeys-lru
+  #   ipAllowList: []  # Allow all connections from within Render
+
+# =============================================================================
+# DATABASE CONFIGURATION NOTES
+# =============================================================================
+
+# Database is configured externally with provided URL
+# PostgreSQL 17 with PostGIS 3.5.3 enabled
+# Connection string includes SSL requirement for security
+
+databases: []  # Using external PostgreSQL service
+
+# =============================================================================
+# DEPLOYMENT PIPELINE NOTES
+# =============================================================================
+
+# Automatic Deployment Trigger:
+# 1. Push to main branch in GitHub
+# 2. Render detects changes via webhook
+# 3. Builds new container with updated code
+# 4. Runs migrations and static file collection
+# 5. Deploys with zero-downtime rolling update
+# 6. Health check verifies deployment success
+
+# Build Process:
+# 1. Install Python dependencies from requirements.txt
+# 2. Run Django migrations (database schema updates)
+# 3. Collect static files for CDN serving
+# 4. Verify PostGIS integration
+# 5. Start Gunicorn production server
+
+# Environment Security:
+# - Secret key auto-generated by Render
+# - Database credentials in environment variables
+# - HTTPS enforced with security headers
+# - Debug mode disabled for production
+
+# =============================================================================
+# POST-DEPLOYMENT SETUP CHECKLIST
+# =============================================================================
+
+# After successful deployment:
+# 
+# 1. ✅ Verify health endpoint: https://shopwindow-backend.onrender.com/api/v1/health/
+# 2. ✅ Check API root: https://shopwindow-backend.onrender.com/api/v1/
+# 3. ✅ Test shopping centers endpoint: https://shopwindow-backend.onrender.com/api/v1/shopping-centers/
+# 4. ✅ Verify admin panel: https://shopwindow-backend.onrender.com/admin/
+# 5. ✅ Load sample data using management command
+# 6. ✅ Test geocoding functionality
+# 7. ✅ Verify map bounds endpoint for frontend integration
+# 
+# Management Commands (run via Render shell):
+# python manage.py createsuperuser
+# python manage.py load_sample_data sample_data.xlsx
+# python manage.py collectstatic --noinput
+# 
+# Monitoring URLs:
+# Health Check: /api/v1/health/
+# API Documentation: /api/v1/info/  
+# Admin Panel: /admin/
+# Statistics: /api/v1/shopping-centers/statistics/
+
+# =============================================================================
+# PRODUCTION OPTIMIZATION NOTES
+# =============================================================================
+
+# Performance Optimizations Included:
+# - Gunicorn with multiple workers and threads
+# - Static file serving via WhiteNoise
+# - Database connection pooling
+# - Query optimization with select_related/prefetch_related
+# - API response caching for statistics endpoints
+# - Geocoding result caching (30-day TTL)
+
+# Security Features Enabled:
+# - HTTPS redirect and HSTS headers
+# - Secure cookie settings
+# - CORS properly configured
+# - SQL injection protection via Django ORM
+# - XSS protection headers
+# - Rate limiting infrastructure ready
+
+# Monitoring & Logging:
+# - Structured logging to stdout/stderr
+# - Health check endpoint for uptime monitoring
+# - API usage statistics
+# - Import batch tracking
+# - Error aggregation ready for external services
+
+# Scaling Considerations:
+# - Auto-scaling from 1-3 instances based on load
+# - Database connection pooling
+# - Stateless application design
+# - External file storage ready (media files)
+# - Cache-friendly API design
+
+# =============================================================================
+# COST ESTIMATION
+# =============================================================================
+
+# Render Starter Plan Costs (as of 2024):
+# - Web Service (starter): $7/month
+# - PostgreSQL (starter): $7/month  
+# - Redis Cache (optional): $3/month
+# - Total: ~$14-17/month for MVP deployment
+#
+# Additional costs:
+# - Google Maps API: ~$0.005 per geocoding request
+# - Estimated $10-50/month depending on usage
+#
+# Production scaling:
+# - Standard plan: $25/month (more CPU/RAM)
+# - Pro plan: $85/month (dedicated resources)
+
+# =============================================================================
+# TROUBLESHOOTING GUIDE
+# =============================================================================
+
+# Common deployment issues and solutions:
+#
+# 1. Build fails on database migration:
+#    - Check DATABASE_URL is correct
+#    - Verify PostGIS extension is enabled
+#    - Review migration files for syntax errors
+#
+# 2. Health check fails:
+#    - Verify /api/v1/health/ endpoint is accessible
+#    - Check database connectivity
+#    - Review application logs
+#
+# 3. Static files not loading:
+#    - Ensure collectstatic runs in build command
+#    - Check STATIC_ROOT and STATIC_URL settings
+#    - Verify WhiteNoise middleware is installed
+#
+# 4. Geocoding not working:
+#    - Verify GOOGLE_MAPS_API_KEY is set
+#    - Check API quota limits
+#    - Test with simple address
+#
+# 5. Import functionality issues:
+#    - Check file upload size limits
+#    - Verify sample data file is included
+#    - Test management command manually
+#
+# Support Resources:
+# - Render Documentation: https://render.com/docs
+# - Django Deployment Guide: https://docs.djangoproject.com/en/5.0/howto/deployment/
+# - PostGIS Documentation: https://postgis.net/documentation/

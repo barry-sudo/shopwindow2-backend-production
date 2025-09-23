@@ -11,7 +11,7 @@ Provides comprehensive admin interface for:
 """
 
 from django.contrib import admin
-from django.contrib.gis.admin import OSMGeoAdmin
+from django.contrib.gis.admin import GISModelAdmin
 from django.db import models
 from django.forms import TextInput, Textarea
 from django.urls import reverse
@@ -148,7 +148,7 @@ class DataQualityFlagInline(admin.TabularInline):
 # =============================================================================
 
 @admin.register(ShoppingCenter)
-class ShoppingCenterAdmin(OSMGeoAdmin):
+class ShoppingCenterAdmin(GISModelAdmin):
     """
     Admin interface for shopping centers with spatial data support.
     

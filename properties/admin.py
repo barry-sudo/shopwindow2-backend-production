@@ -27,7 +27,7 @@ from .models import (
     DataQualityFlag, 
     TenantCategoryTaxonomy
 )
-
+from imports.models import ImportBatch  # <- Import from correct app
 
 # =============================================================================
 # CUSTOM ADMIN FILTERS

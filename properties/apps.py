@@ -35,8 +35,6 @@ class PropertiesConfig(AppConfig):
         - Model validation and data quality triggers
         - PostGIS spatial index optimization
         """
-        # Import signals to register them
-        from . import signals
         
         # Register custom model managers and QuerySets
         self.setup_custom_managers()

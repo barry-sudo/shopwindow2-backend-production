@@ -4,6 +4,8 @@ Properties models for Shop Window application.
 This module implements the core business entities for retail commercial real estate:
 - ShoppingCenter: Properties with progressive data enrichment
 - Tenant: Retail businesses within shopping centers
+- DataQualityFlag: Data quality monitoring and issue tracking
+- TenantCategoryTaxonomy: Standardized retail category classification
 
 Business Rules Implemented:
 - Shopping centers are UNIQUE by name (core business rule)
@@ -16,6 +18,9 @@ Business Rules Implemented:
 from django.db import models
 from django.contrib.gis.db import models as gis_models
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.gis.geos import Point
 from django.utils import timezone
@@ -686,6 +691,388 @@ class Tenant(models.Model):
 
 
 # =============================================================================
+# DATA QUALITY FLAG MODEL
+# =============================================================================
+
+class DataQualityFlag(models.Model):
+    """
+    Data quality monitoring and issue tracking system.
+    
+    Uses Django's generic foreign key to flag issues on any model.
+    Supports the progressive data enrichment workflow by identifying
+    missing, invalid, or suspicious data that requires attention.
+    
+    Business Rules:
+    - Can be attached to any model (ShoppingCenter, Tenant, etc.)
+    - Severity levels determine priority for resolution
+    - Flags can be resolved by users with tracking
+    - Automatic flagging via data validation processes
+    """
+    
+    # =============================================================================
+    # FLAG TYPE CHOICES
+    # =============================================================================
+    
+    FLAG_TYPE_CHOICES = [
+        ('MISSING_DATA', 'Missing Required Data'),
+        ('INVALID_FORMAT', 'Invalid Data Format'),
+        ('SUSPICIOUS_VALUE', 'Suspicious Data Value'), 
+        ('DUPLICATE_DETECTED', 'Duplicate Record Detected'),
+        ('GEOCODING_FAILED', 'Geocoding Failed'),
+        ('CALCULATION_ERROR', 'Calculation Error'),
+        ('IMPORT_WARNING', 'Import Process Warning'),
+        ('VALIDATION_FAILED', 'Validation Rule Failed'),
+        ('INCONSISTENT_DATA', 'Data Inconsistency Detected'),
+        ('MANUAL_REVIEW', 'Manual Review Required'),
+    ]
+    
+    SEVERITY_CHOICES = [
+        ('LOW', 'Low - Informational'),
+        ('MEDIUM', 'Medium - Should Fix'),
+        ('HIGH', 'High - Important'),
+        ('CRITICAL', 'Critical - Must Fix'),
+    ]
+    
+    # =============================================================================
+    # MODEL FIELDS
+    # =============================================================================
+    
+    id = models.AutoField(primary_key=True)
+    
+    # Generic Foreign Key - can point to any model
+    content_type = models.ForeignKey(
+        ContentType,
+        on_delete=models.CASCADE,
+        help_text="Model type this flag applies to"
+    )
+    object_id = models.PositiveIntegerField(
+        help_text="Primary key of the flagged object"
+    )
+    content_object = GenericForeignKey('content_type', 'object_id')
+    
+    # Flag Details
+    flag_type = models.CharField(
+        max_length=30,
+        choices=FLAG_TYPE_CHOICES,
+        db_index=True,
+        help_text="Type of data quality issue"
+    )
+    severity = models.CharField(
+        max_length=10,
+        choices=SEVERITY_CHOICES,
+        default='MEDIUM',
+        db_index=True,
+        help_text="Severity level for prioritization"
+    )
+    
+    field_name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Specific field that has the issue"
+    )
+    
+    message = models.TextField(
+        help_text="Detailed description of the data quality issue"
+    )
+    
+    # Resolution Tracking
+    is_resolved = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Whether this flag has been resolved"
+    )
+    resolved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='resolved_flags',
+        help_text="User who resolved this flag"
+    )
+    resolved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this flag was resolved"
+    )
+    resolution_notes = models.TextField(
+        blank=True,
+        help_text="Notes about how the issue was resolved"
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # =============================================================================
+    # MODEL METHODS
+    # =============================================================================
+    
+    def mark_resolved(self, user=None, notes=""):
+        """Mark this flag as resolved."""
+        self.is_resolved = True
+        self.resolved_by = user
+        self.resolved_at = timezone.now()
+        self.resolution_notes = notes
+        self.save()
+    
+    def mark_unresolved(self):
+        """Mark this flag as unresolved."""
+        self.is_resolved = False
+        self.resolved_by = None
+        self.resolved_at = None
+        self.resolution_notes = ""
+        self.save()
+    
+    def get_severity_display_color(self):
+        """Get color for severity display."""
+        colors = {
+            'LOW': '#28a745',      # Green
+            'MEDIUM': '#ffc107',   # Yellow
+            'HIGH': '#fd7e14',     # Orange  
+            'CRITICAL': '#dc3545'  # Red
+        }
+        return colors.get(self.severity, '#6c757d')
+    
+    @classmethod
+    def create_flag(cls, content_object, flag_type, severity='MEDIUM', field_name=None, message=""):
+        """
+        Convenience method to create a data quality flag.
+        
+        Args:
+            content_object: The model instance to flag
+            flag_type: Type of flag (from FLAG_TYPE_CHOICES)
+            severity: Severity level (from SEVERITY_CHOICES)
+            field_name: Specific field with the issue
+            message: Detailed description
+        
+        Returns:
+            DataQualityFlag instance
+        """
+        return cls.objects.create(
+            content_object=content_object,
+            flag_type=flag_type,
+            severity=severity,
+            field_name=field_name,
+            message=message
+        )
+    
+    # =============================================================================
+    # MODEL CONFIGURATION
+    # =============================================================================
+    
+    class Meta:
+        db_table = 'data_quality_flags'
+        ordering = ['-created_at', '-severity']
+        verbose_name = 'Data Quality Flag'
+        verbose_name_plural = 'Data Quality Flags'
+        
+        indexes = [
+            # Performance indexes for common queries
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['flag_type', 'severity']),
+            models.Index(fields=['is_resolved', '-created_at']),
+            models.Index(fields=['severity', '-created_at']),
+            models.Index(fields=['resolved_by']),
+        ]
+        
+        constraints = [
+            # Ensure content_type and object_id are both provided
+            models.CheckConstraint(
+                check=models.Q(object_id__gt=0),
+                name='valid_object_id'
+            ),
+        ]
+    
+    def __str__(self):
+        model_name = self.content_type.model if self.content_type else "Unknown"
+        field_info = f" ({self.field_name})" if self.field_name else ""
+        return f"{self.get_flag_type_display()}{field_info} - {model_name} #{self.object_id}"
+    
+    def __repr__(self):
+        return f"<DataQualityFlag: {self.flag_type} - {self.severity}>"
+
+
+# =============================================================================
+# TENANT CATEGORY TAXONOMY MODEL
+# =============================================================================
+
+class TenantCategoryTaxonomy(models.Model):
+    """
+    Standardized retail category classification system.
+    
+    Implements hierarchical taxonomy for tenant categorization using
+    ICSC (International Council of Shopping Centers) standards where applicable.
+    
+    Business Rules:
+    - Hierarchical structure (parent/child categories)
+    - ICSC codes for standardization
+    - Supports multiple classification levels
+    - Used for tenant categorization and analysis
+    """
+    
+    # =============================================================================
+    # MODEL FIELDS
+    # =============================================================================
+    
+    id = models.AutoField(primary_key=True)
+    
+    category_name = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text="Category name (e.g., 'Restaurants & Food Service')"
+    )
+    
+    parent_category = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='subcategories',
+        help_text="Parent category for hierarchical structure"
+    )
+    
+    icsc_code = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        unique=True,
+        help_text="ICSC standard category code"
+    )
+    
+    description = models.TextField(
+        blank=True,
+        help_text="Detailed description of this category"
+    )
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # =============================================================================
+    # MODEL METHODS
+    # =============================================================================
+    
+    def get_full_category_path(self):
+        """Get full hierarchical path (e.g., 'Retail > Apparel > Shoes')."""
+        path_parts = [self.category_name]
+        current = self.parent_category
+        
+        while current:
+            path_parts.insert(0, current.category_name)
+            current = current.parent_category
+        
+        return ' > '.join(path_parts)
+    
+    def get_all_children(self):
+        """Get all child categories recursively."""
+        children = list(self.subcategories.all())
+        for child in list(children):
+            children.extend(child.get_all_children())
+        return children
+    
+    def is_root_category(self):
+        """Check if this is a root-level category."""
+        return self.parent_category is None
+    
+    def get_depth_level(self):
+        """Get the depth level in hierarchy (root = 0)."""
+        depth = 0
+        current = self.parent_category
+        while current:
+            depth += 1
+            current = current.parent_category
+        return depth
+    
+    @classmethod
+    def get_root_categories(cls):
+        """Get all root-level categories."""
+        return cls.objects.filter(parent_category__isnull=True)
+    
+    @classmethod
+    def create_category_hierarchy(cls, category_data):
+        """
+        Create a hierarchical category structure from nested data.
+        
+        Args:
+            category_data: Dict with category info and optional 'children' list
+            
+        Example:
+            {
+                'name': 'Retail',
+                'icsc_code': 'R001',
+                'description': 'Retail businesses',
+                'children': [
+                    {
+                        'name': 'Apparel',
+                        'icsc_code': 'R001-A',
+                        'description': 'Clothing stores'
+                    }
+                ]
+            }
+        """
+        category, created = cls.objects.get_or_create(
+            category_name=category_data['name'],
+            defaults={
+                'icsc_code': category_data.get('icsc_code'),
+                'description': category_data.get('description', ''),
+            }
+        )
+        
+        # Process children if provided
+        if 'children' in category_data:
+            for child_data in category_data['children']:
+                child_category, child_created = cls.objects.get_or_create(
+                    category_name=child_data['name'],
+                    defaults={
+                        'parent_category': category,
+                        'icsc_code': child_data.get('icsc_code'),
+                        'description': child_data.get('description', ''),
+                    }
+                )
+                
+                # Recursively process nested children
+                if 'children' in child_data:
+                    child_data_copy = child_data.copy()
+                    cls.create_category_hierarchy(child_data_copy)
+        
+        return category
+    
+    # =============================================================================
+    # MODEL CONFIGURATION
+    # =============================================================================
+    
+    class Meta:
+        db_table = 'tenant_category_taxonomy'
+        ordering = ['category_name']
+        verbose_name = 'Tenant Category'
+        verbose_name_plural = 'Tenant Categories'
+        
+        indexes = [
+            models.Index(fields=['category_name']),
+            models.Index(fields=['parent_category']),
+            models.Index(fields=['icsc_code']),
+        ]
+        
+        constraints = [
+            # Prevent self-referential parent categories
+            models.CheckConstraint(
+                check=~models.Q(id=models.F('parent_category')),
+                name='no_self_parent'
+            ),
+        ]
+    
+    def __str__(self):
+        if self.parent_category:
+            return f"{self.parent_category.category_name} > {self.category_name}"
+        return self.category_name
+    
+    def __repr__(self):
+        return f"<TenantCategoryTaxonomy: {self.category_name}>"
+
+
+# =============================================================================
 # MODEL SIGNALS AND UTILITIES
 # =============================================================================
 
@@ -702,6 +1089,29 @@ def update_shopping_center_on_tenant_delete(sender, instance, **kwargs):
     """Update shopping center data quality score when tenants are deleted."""
     if hasattr(instance, 'shopping_center') and instance.shopping_center:
         instance.shopping_center.save()  # This will recalculate quality score
+
+@receiver(post_save, sender=ShoppingCenter)
+def create_quality_flags_on_shopping_center_save(sender, instance, created, **kwargs):
+    """Automatically create data quality flags for new shopping centers."""
+    if created:
+        # Create flags for missing critical data
+        if not instance.address_street:
+            DataQualityFlag.create_flag(
+                content_object=instance,
+                flag_type='MISSING_DATA',
+                severity='HIGH',
+                field_name='address_street',
+                message='Street address is required for geocoding and mapping'
+            )
+        
+        if not instance.total_gla:
+            DataQualityFlag.create_flag(
+                content_object=instance,
+                flag_type='MISSING_DATA', 
+                severity='MEDIUM',
+                field_name='total_gla',
+                message='Total GLA is required for property analysis'
+            )
 
 
 # =============================================================================
@@ -756,6 +1166,33 @@ class TenantManager(models.Manager):
         return self.filter(lease_expiration__lte=warning_date, lease_expiration__gte=date.today())
 
 
+class DataQualityFlagManager(models.Manager):
+    """Custom manager for DataQualityFlag with common queries."""
+    
+    def unresolved(self):
+        """Get only unresolved flags."""
+        return self.filter(is_resolved=False)
+    
+    def by_severity(self, severity):
+        """Get flags by severity level."""
+        return self.filter(severity=severity)
+    
+    def critical_flags(self):
+        """Get only critical flags."""
+        return self.filter(severity='CRITICAL')
+    
+    def for_model(self, model_class):
+        """Get flags for a specific model type."""
+        content_type = ContentType.objects.get_for_model(model_class)
+        return self.filter(content_type=content_type)
+    
+    def for_object(self, obj):
+        """Get flags for a specific object instance."""
+        content_type = ContentType.objects.get_for_model(obj.__class__)
+        return self.filter(content_type=content_type, object_id=obj.pk)
+
+
 # Add custom managers to models
 ShoppingCenter.add_to_class('objects', ShoppingCenterManager())
 Tenant.add_to_class('objects', TenantManager())
+DataQualityFlag.add_to_class('objects', DataQualityFlagManager())

@@ -19,11 +19,12 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.contrib.admin import SimpleListFilter
 from django.db.models import Count, Q, Avg
+from django.utils import timezone
 
 from .models import (
     ShoppingCenter, 
     Tenant, 
-    DataQualityFlag, 
+    DataQualityFlag,
     TenantCategoryTaxonomy
 )
 from imports.models import ImportBatch  # <- Import from correct app
@@ -329,15 +330,12 @@ class ShoppingCenterAdmin(GISModelAdmin):
     
     def recalculate_quality_scores(self, request, queryset):
         """Bulk action to recalculate data quality scores"""
-        from services.business_logic import calculate_data_quality_score
-        
         updated_count = 0
         for center in queryset:
             old_score = center.data_quality_score
-            new_score = calculate_data_quality_score(center)
-            if new_score != old_score:
-                center.data_quality_score = new_score
-                center.save(update_fields=['data_quality_score'])
+            # Trigger recalculation by saving
+            center.save()
+            if center.data_quality_score != old_score:
                 updated_count += 1
         
         self.message_user(request, f'Recalculated quality scores for {updated_count} shopping centers.')
@@ -345,24 +343,26 @@ class ShoppingCenterAdmin(GISModelAdmin):
     
     def geocode_missing_coordinates(self, request, queryset):
         """Bulk action to geocode shopping centers missing coordinates"""
-        from services.geocoding import geocode_address
-        
+        # Note: This would need actual geocoding service implementation
         missing_coords = queryset.filter(Q(latitude__isnull=True) | Q(longitude__isnull=True))
         geocoded_count = 0
         
         for center in missing_coords[:10]:  # Limit to 10 to avoid API limits
             if center.address_street and center.address_city:
                 try:
-                    full_address = f"{center.address_street}, {center.address_city}, {center.address_state} {center.address_zip}"
-                    lat, lng = geocode_address(full_address)
-                    center.latitude = lat
-                    center.longitude = lng
-                    center.save(update_fields=['latitude', 'longitude'])
-                    geocoded_count += 1
+                    # Placeholder for actual geocoding implementation
+                    # from services.geocoding import geocode_address
+                    # full_address = f"{center.address_street}, {center.address_city}, {center.address_state} {center.address_zip}"
+                    # lat, lng = geocode_address(full_address)
+                    # center.latitude = lat
+                    # center.longitude = lng
+                    # center.save(update_fields=['latitude', 'longitude'])
+                    # geocoded_count += 1
+                    pass
                 except Exception:
                     continue
         
-        self.message_user(request, f'Geocoded {geocoded_count} shopping centers.')
+        self.message_user(request, f'Geocoding service would process {missing_coords.count()} centers (placeholder).')
     geocode_missing_coordinates.short_description = 'Geocode missing coordinates (max 10)'
 
 
@@ -467,45 +467,6 @@ class TenantAdmin(admin.ModelAdmin):
     lease_status.short_description = 'Lease Status'
 
 
-@admin.register(ImportBatch)
-class ImportBatchAdmin(admin.ModelAdmin):
-    """Admin interface for import batch tracking and review"""
-    
-    list_display = [
-        'id',
-        'import_type',
-        'status',
-        'file_name',
-        'total_records',
-        'success_rate',
-        'created_at',
-        'created_by'
-    ]
-    
-    list_filter = [
-        'import_type',
-        'status', 
-        'created_at'
-    ]
-    
-    readonly_fields = [
-        'id',
-        'file_hash',
-        'created_at',
-        'started_at',
-        'completed_at',
-        'error_log'
-    ]
-    
-    def success_rate(self, obj):
-        """Calculate and display import success rate"""
-        if obj.total_records > 0:
-            rate = (obj.successful_records / obj.total_records) * 100
-            return f"{rate:.1f}%"
-        return "-"
-    success_rate.short_description = 'Success Rate'
-
-
 @admin.register(DataQualityFlag)
 class DataQualityFlagAdmin(admin.ModelAdmin):
     """Admin interface for data quality monitoring"""
@@ -516,7 +477,7 @@ class DataQualityFlagAdmin(admin.ModelAdmin):
         'flag_type',
         'severity',
         'field_name',
-        'message',
+        'message_preview',
         'is_resolved',
         'created_at'
     ]
@@ -531,7 +492,35 @@ class DataQualityFlagAdmin(admin.ModelAdmin):
     
     search_fields = ['message', 'field_name']
     
+    readonly_fields = ['content_type', 'object_id', 'created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Flag Details', {
+            'fields': ('content_type', 'object_id', 'flag_type', 'severity'),
+        }),
+        
+        ('Issue Description', {
+            'fields': ('field_name', 'message'),
+        }),
+        
+        ('Resolution', {
+            'fields': ('is_resolved', 'resolved_by', 'resolved_at', 'resolution_notes'),
+        }),
+        
+        ('System Info', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',),
+        })
+    )
+    
     actions = ['mark_resolved', 'mark_unresolved']
+    
+    def message_preview(self, obj):
+        """Display truncated message for list view"""
+        if len(obj.message) > 50:
+            return f"{obj.message[:50]}..."
+        return obj.message
+    message_preview.short_description = 'Message'
     
     def mark_resolved(self, request, queryset):
         updated = queryset.update(
@@ -556,7 +545,7 @@ class DataQualityFlagAdmin(admin.ModelAdmin):
 class TenantCategoryTaxonomyAdmin(admin.ModelAdmin):
     """Admin interface for managing tenant category taxonomy"""
     
-    list_display = ['category_name', 'parent_category', 'icsc_code']
+    list_display = ['category_name_display', 'parent_category', 'icsc_code', 'subcategory_count']
     list_filter = ['parent_category']
     search_fields = ['category_name', 'icsc_code', 'description']
     
@@ -565,6 +554,57 @@ class TenantCategoryTaxonomyAdmin(admin.ModelAdmin):
             'fields': ('category_name', 'parent_category', 'icsc_code', 'description')
         }),
     )
+    
+    def category_name_display(self, obj):
+        """Display category with indentation for hierarchy"""
+        depth = obj.get_depth_level()
+        indent = '—' * depth
+        return f"{indent} {obj.category_name}" if depth > 0 else obj.category_name
+    category_name_display.short_description = 'Category Name'
+    
+    def subcategory_count(self, obj):
+        """Display count of direct subcategories"""
+        count = obj.subcategories.count()
+        return f"{count} subcategories" if count > 0 else "No subcategories"
+    subcategory_count.short_description = 'Subcategories'
+
+
+@admin.register(ImportBatch)
+class ImportBatchAdmin(admin.ModelAdmin):
+    """Admin interface for import batch tracking and review"""
+    
+    list_display = [
+        'batch_id',
+        'import_type',
+        'status',
+        'file_name',
+        'records_processed',
+        'success_rate',
+        'created_at',
+        'created_by'
+    ]
+    
+    list_filter = [
+        'import_type',
+        'status', 
+        'created_at'
+    ]
+    
+    readonly_fields = [
+        'batch_id',
+        'created_at',
+        'updated_at',
+        'started_at',
+        'completed_at'
+    ]
+    
+    def success_rate(self, obj):
+        """Calculate and display import success rate"""
+        if obj.records_total > 0:
+            rate = ((obj.records_created + obj.records_updated) / obj.records_total) * 100
+            return f"{rate:.1f}%"
+        return "-"
+    success_rate.short_description = 'Success Rate'
 
 
 # =============================================================================

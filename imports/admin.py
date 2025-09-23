@@ -55,7 +55,6 @@ class ImportBatchAdmin(admin.ModelAdmin):
         'status',
         'import_type',
         ('created_at', admin.DateFieldListFilter),
-        ('quality_score', admin.RangeNumericFilter),
         'has_errors'
     ]
     

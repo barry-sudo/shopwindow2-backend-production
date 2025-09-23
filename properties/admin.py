@@ -569,42 +569,6 @@ class TenantCategoryTaxonomyAdmin(admin.ModelAdmin):
     subcategory_count.short_description = 'Subcategories'
 
 
-@admin.register(ImportBatch)
-class ImportBatchAdmin(admin.ModelAdmin):
-    """Admin interface for import batch tracking and review"""
-    
-    list_display = [
-        'batch_id',
-        'import_type',
-        'status',
-        'file_name',
-        'records_processed',
-        'success_rate',
-        'created_at',
-        'created_by'
-    ]
-    
-    list_filter = [
-        'import_type',
-        'status', 
-        'created_at'
-    ]
-    
-    readonly_fields = [
-        'batch_id',
-        'created_at',
-        'updated_at',
-        'started_at',
-        'completed_at'
-    ]
-    
-    def success_rate(self, obj):
-        """Calculate and display import success rate"""
-        if obj.records_total > 0:
-            rate = ((obj.records_created + obj.records_updated) / obj.records_total) * 100
-            return f"{rate:.1f}%"
-        return "-"
-    success_rate.short_description = 'Success Rate'
 
 
 # =============================================================================

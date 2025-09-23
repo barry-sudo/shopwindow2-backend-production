@@ -77,6 +77,10 @@ services:
     # =============================================================================
     
     envVars:
+
+ 	- key: PYTHON_VERSION
+    	value: "3.11.9"
+
       # Django Core Settings
       - key: DJANGO_SETTINGS_MODULE
         value: shopwindow.settings

@@ -23,7 +23,6 @@ from django.db.models import Count, Q, Avg
 from .models import (
     ShoppingCenter, 
     Tenant, 
-    ImportBatch, 
     DataQualityFlag, 
     TenantCategoryTaxonomy
 )

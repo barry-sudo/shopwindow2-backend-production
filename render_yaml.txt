@@ -10,6 +10,7 @@ services:
   - type: web
     name: shopwindow-backend
     runtime: python3
+    pythonVersion: "3.11.9"   # 
     plan: starter  # Can be upgraded to standard/pro for production scale
     
     # =============================================================================

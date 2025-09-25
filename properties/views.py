@@ -1,4 +1,4 @@
-# properties/views.py - EMERGENCY FIX (No PostGIS required)
+# properties/views.py - CORRECTED VERSION WITH POSTGIS IMPORT FIX
 
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
@@ -6,7 +6,9 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q, Count
-# EMERGENCY FIX: Remove all geographic imports temporarily
+from django.contrib.gis.db.models.functions import Distance  # FIXED: Proper PostGIS import
+from django.contrib.gis.measure import D  # FIXED: Add proper measure import
+from django.contrib.gis.geos import Point  # FIXED: Add Point import
 import logging
 
 from .models import ShoppingCenter, Tenant
@@ -28,7 +30,7 @@ class ShoppingCenterViewSet(viewsets.ModelViewSet):
     queryset = ShoppingCenter.objects.all()
     serializer_class = ShoppingCenterSerializer
     permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.SearchBackend, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ShoppingCenterFilter
     search_fields = [
         'shopping_center_name', 
@@ -52,7 +54,7 @@ class ShoppingCenterViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Enhanced queryset with data quality indicators.
+        Enhanced queryset with geographic filtering and data quality indicators.
         """
         queryset = ShoppingCenter.objects.select_related().prefetch_related('tenants')
         
@@ -66,20 +68,51 @@ class ShoppingCenterViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def nearby(self, request):
         """
-        EMERGENCY FIX: Geographic search temporarily disabled.
+        Find shopping centers within specified distance of coordinates.
+        Uses PostGIS for geographic queries.
         """
-        return Response(
-            {
-                "message": "Geographic search temporarily unavailable",
-                "error": "PostGIS configuration in progress",
-                "available_endpoints": [
-                    "/api/v1/shopping-centers/",
-                    "/api/v1/shopping-centers/data_quality/", 
-                    "/api/v1/shopping-centers/{id}/enrich_data/"
-                ]
-            },
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        try:
+            lat = float(request.query_params.get('lat', 0))
+            lng = float(request.query_params.get('lng', 0))
+            radius = float(request.query_params.get('radius', 10))  # km
+            
+            # Validate coordinates
+            if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                return Response(
+                    {"error": "Invalid coordinates provided"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create point for user location
+            user_location = Point(lng, lat, srid=4326)
+            
+            # PostGIS distance query - now works with corrected import
+            nearby_centers = self.get_queryset().annotate(
+                distance=Distance('location', user_location)
+            ).filter(
+                location__distance_lte=(user_location, D(km=radius))
+            ).order_by('distance')
+            
+            serializer = self.get_serializer(nearby_centers, many=True)
+            return Response({
+                'results': serializer.data,
+                'search_center': {'lat': lat, 'lng': lng},
+                'radius_km': radius,
+                'count': nearby_centers.count()
+            })
+            
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid parameters for nearby search: {str(e)}")
+            return Response(
+                {"error": "Invalid coordinates or radius provided"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Geographic query failed: {str(e)}")
+            return Response(
+                {"error": "Geographic search temporarily unavailable"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
 
     @action(detail=False, methods=['get'])
     def data_quality(self, request):
@@ -90,6 +123,12 @@ class ShoppingCenterViewSet(viewsets.ModelViewSet):
         centers = self.get_queryset()
         
         total_count = centers.count()
+        if total_count == 0:
+            return Response({
+                'message': 'No shopping centers in database',
+                'total_centers': 0
+            })
+        
         complete_address = centers.exclude(
             Q(address_street__isnull=True) | Q(address_street__exact='')
         ).count()
@@ -97,21 +136,28 @@ class ShoppingCenterViewSet(viewsets.ModelViewSet):
             Q(total_gla__isnull=True) | Q(total_gla=0)
         ).count()
         has_tenants = centers.filter(tenant_count__gt=0).count()
+        has_coordinates = centers.exclude(
+            Q(latitude__isnull=True) | Q(longitude__isnull=True)
+        ).count()
         
         return Response({
             'total_centers': total_count,
             'data_completeness': {
                 'complete_addresses': {
                     'count': complete_address,
-                    'percentage': round((complete_address / total_count * 100) if total_count > 0 else 0, 1)
+                    'percentage': round((complete_address / total_count * 100), 1)
                 },
                 'has_gla_data': {
                     'count': has_gla,
-                    'percentage': round((has_gla / total_count * 100) if total_count > 0 else 0, 1)
+                    'percentage': round((has_gla / total_count * 100), 1)
                 },
                 'has_tenant_data': {
                     'count': has_tenants,
-                    'percentage': round((has_tenants / total_count * 100) if total_count > 0 else 0, 1)
+                    'percentage': round((has_tenants / total_count * 100), 1)
+                },
+                'has_coordinates': {
+                    'count': has_coordinates,
+                    'percentage': round((has_coordinates / total_count * 100), 1)
                 }
             }
         })
@@ -125,15 +171,18 @@ class ShoppingCenterViewSet(viewsets.ModelViewSet):
         serializer = ShoppingCenterSerializer(center, data=request.data, partial=True)
         
         if serializer.is_valid():
+            # Track what fields are being enriched
+            enriched_fields = []
+            for field, value in request.data.items():
+                old_value = getattr(center, field, None)
+                if old_value != value and value is not None and value != '':
+                    enriched_fields.append(field)
+            
             serializer.save()
             
             # Log enrichment for audit trail
-            enriched_fields = [
-                field for field in request.data.keys() 
-                if getattr(center, field, None) != request.data[field]
-            ]
-            
-            logger.info(f"Data enriched for center {center.id}: {enriched_fields}")
+            if enriched_fields:
+                logger.info(f"Data enriched for center {center.id}: {enriched_fields}")
             
             return Response({
                 'message': 'Data successfully enriched',
@@ -151,7 +200,7 @@ class TenantViewSet(viewsets.ModelViewSet):
     queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
     permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.SearchBackend, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = TenantFilter
     search_fields = ['tenant_name', 'tenant_category', 'shopping_center__shopping_center_name']
     ordering_fields = ['tenant_name', 'square_footage', 'lease_start_date']
@@ -207,3 +256,39 @@ class TenantViewSet(viewsets.ModelViewSet):
         }
         
         return Response(analysis)
+
+
+# Health check endpoint for monitoring
+from rest_framework.decorators import api_view
+
+@api_view(['GET'])
+def health_check(request):
+    """System health check including PostGIS availability."""
+    try:
+        from django.db import connection
+        
+        # Test basic database connection
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            db_status = "connected"
+            
+            # Test PostGIS availability
+            try:
+                cursor.execute("SELECT PostGIS_Version();")
+                postgis_version = cursor.fetchone()[0]
+                postgis_status = f"available - {postgis_version}"
+            except Exception as e:
+                postgis_status = f"unavailable - {str(e)}"
+        
+        return Response({
+            'status': 'healthy',
+            'database': db_status,
+            'postgis': postgis_status,
+            'timestamp': timezone.now().isoformat()
+        })
+    except Exception as e:
+        return Response({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)

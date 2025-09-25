@@ -9,6 +9,7 @@ from django.db.models import Q, Count
 from django.contrib.gis.db.models.functions import Distance  # FIXED: Proper PostGIS import
 from django.contrib.gis.measure import D  # FIXED: Add proper measure import
 from django.contrib.gis.geos import Point  # FIXED: Add Point import
+from django.utils import timezone  # FIXED: Add missing timezone import
 import logging
 
 from .models import ShoppingCenter, Tenant
@@ -284,11 +285,11 @@ def health_check(request):
             'status': 'healthy',
             'database': db_status,
             'postgis': postgis_status,
-            'timestamp': timezone.now().isoformat()
+            'timestamp': timezone.now().isoformat()  # FIXED: Now timezone is properly imported
         })
     except Exception as e:
         return Response({
             'status': 'unhealthy',
             'error': str(e),
-            'timestamp': timezone.now().isoformat()
+            'timestamp': timezone.now().isoformat()  # FIXED: Now timezone is properly imported
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)

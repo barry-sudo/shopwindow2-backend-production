@@ -20,6 +20,7 @@ from django.urls import path, include
 from django.http import JsonResponse
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import require_http_methods
+from django.utils import timezone  # FIXED: Add missing timezone import
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -67,7 +68,7 @@ def health_check(request):
             "postgis": postgis_status,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
             "django_version": settings.DEBUG,  # Don't expose version in production
-            "timestamp": str(timezone.now()) if 'timezone' in locals() else None,
+            "timestamp": timezone.now().isoformat(),  # FIXED: Now timezone is properly imported
         }
         
         return JsonResponse(response_data, status=200)
@@ -77,7 +78,8 @@ def health_check(request):
         error_response = {
             "status": "unhealthy",
             "database": "error",
-            "error": str(e) if settings.DEBUG else "Database connection failed"
+            "error": str(e) if settings.DEBUG else "Database connection failed",
+            "timestamp": timezone.now().isoformat()
         }
         return JsonResponse(error_response, status=503)
 

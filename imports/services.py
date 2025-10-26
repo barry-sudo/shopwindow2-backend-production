@@ -31,7 +31,8 @@ from properties.models import ShoppingCenter, Tenant
 
 # Import services
 from services.geocoding import geocode_address
-from services.business_logic import calculate_quality_score, validate_shopping_center_data
+# Temporarily disabled - not needed for stocking shelves import philosophy
+# from services.business_logic import calculate_quality_score, validate_shopping_center_data
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -143,7 +144,8 @@ class CSVImportService:
             # Detect CSV dialect
             sample = content[:1024]
             sniffer = csv.Sniffer()
-            delimiter = sniffer.sniff(sample).delimiter
+            # Force comma delimiter (sniffer can be unreliable)
+            delimiter = ','
             
             # Read CSV with detected delimiter
             csv_file.seek(0)  # Reset to beginning

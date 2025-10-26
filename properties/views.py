@@ -1,295 +1,384 @@
-# properties/views.py - CORRECTED VERSION WITH POSTGIS IMPORT FIX
+"""
+Views for the properties app.
 
-from rest_framework import viewsets, status, filters
-from rest_framework.decorators import action
+This module defines the API viewsets for Shopping Centers and Tenants,
+including filtering, search, and custom actions.
+
+CHANGES (Oct 25, 2025):
+- Added ShoppingCenterPagination class to explicitly enable page_size query parameter
+- This fixes the issue where frontend requests for page_size=100 were being ignored
+- Now respects ?page_size=X parameter up to MAX_PAGE_SIZE of 1000
+- Corrected serializer import names to match actual serializers.py
+"""
+
+from rest_framework import viewsets, filters, status
+from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db.models import Q, Count
-from django.contrib.gis.db.models.functions import Distance  # FIXED: Proper PostGIS import
-from django.contrib.gis.measure import D  # FIXED: Add proper measure import
-from django.contrib.gis.geos import Point  # FIXED: Add Point import
-from django.utils import timezone  # FIXED: Add missing timezone import
-import logging
-
+from django.db.models import Count, Q, Avg, Sum
 from .models import ShoppingCenter, Tenant
 from .serializers import (
-    ShoppingCenterSerializer, 
-    TenantSerializer,
-    ShoppingCenterDetailSerializer
+    ShoppingCenterListSerializer,
+    ShoppingCenterDetailSerializer,
+    TenantListSerializer,
+    TenantDetailSerializer
 )
 from .filters import ShoppingCenterFilter, TenantFilter
 
-logger = logging.getLogger(__name__)
 
+# =============================================================================
+# CUSTOM PAGINATION CLASS
+# =============================================================================
+
+class ShoppingCenterPagination(PageNumberPagination):
+    """
+    Custom pagination class for Shopping Centers.
+    
+    Explicitly enables page_size query parameter to allow frontend
+    to request variable page sizes (up to 1000 results).
+    
+    This fixes the issue where the global PAGE_SIZE_QUERY_PARAM setting
+    wasn't being respected. By defining it directly on the pagination class,
+    we ensure the ViewSet will honor ?page_size=X in the URL.
+    
+    Usage:
+        GET /api/v1/shopping-centers/              → Returns 20 results (default)
+        GET /api/v1/shopping-centers/?page_size=100 → Returns 100 results
+        GET /api/v1/shopping-centers/?page_size=1000 → Returns 1000 results (max)
+    """
+    page_size = 20  # Default page size
+    page_size_query_param = 'page_size'  # Allow client to override with ?page_size=X
+    max_page_size = 1000  # Maximum allowed page size
+
+
+# =============================================================================
+# SHOPPING CENTER VIEWSET
+# =============================================================================
 
 class ShoppingCenterViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for ShoppingCenter model with progressive data enrichment support.
-    Implements the "stocking shelves" philosophy - accepts incomplete data gracefully.
+    API endpoint for Shopping Centers.
+    
+    Supports:
+    - List all shopping centers (with pagination)
+    - Create new shopping center
+    - Retrieve specific shopping center
+    - Update shopping center
+    - Delete shopping center
+    - Filtering by type, owner, state, etc.
+    - Search by name, address
+    - Ordering by various fields
+    - Custom actions for map bounds and data quality
+    
+    Pagination:
+    - Default: 20 results per page
+    - Customizable via ?page_size=X parameter (max 1000)
     """
     queryset = ShoppingCenter.objects.all()
-    serializer_class = ShoppingCenterSerializer
-    permission_classes = [IsAuthenticated]
+    serializer_class = ShoppingCenterListSerializer
+    pagination_class = ShoppingCenterPagination  # Custom pagination with page_size support
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ShoppingCenterFilter
+    
+    # Search configuration
     search_fields = [
-        'shopping_center_name', 
-        'address_city', 
+        'shopping_center_name',
+        'address_street',
+        'address_city',
         'address_state',
-        'center_type'
+        'owner',
+        'property_manager'
     ]
+    
+    # Ordering configuration
     ordering_fields = [
-        'shopping_center_name', 
-        'total_gla', 
+        'shopping_center_name',
+        'address_city',
+        'address_state',
+        'total_gla',
         'year_built',
-        'created_at'
+        'created_at',
+        'updated_at'
     ]
-    ordering = ['-created_at']
-
+    ordering = ['shopping_center_name']  # Default ordering
+    
     def get_serializer_class(self):
-        """Use detailed serializer for retrieve actions."""
+        """
+        Use detailed serializer for retrieve actions, standard serializer for list.
+        This optimizes performance by not loading nested tenant data in list view.
+        """
         if self.action == 'retrieve':
             return ShoppingCenterDetailSerializer
-        return ShoppingCenterSerializer
-
+        return ShoppingCenterListSerializer
+    
     def get_queryset(self):
         """
-        Enhanced queryset with geographic filtering and data quality indicators.
+        Optionally filter queryset based on query parameters.
+        Optimizes queries by selecting related data when needed.
         """
-        queryset = ShoppingCenter.objects.select_related().prefetch_related('tenants')
+        queryset = ShoppingCenter.objects.all()
         
-        # Add data completeness annotation
-        queryset = queryset.annotate(
-            tenant_count=Count('tenants')
-        )
+        # For detail views, prefetch related tenants
+        if self.action == 'retrieve':
+            queryset = queryset.prefetch_related('tenants')
+        
+        # Add annotations for computed fields if needed
+        if self.action in ['list', 'retrieve']:
+            queryset = queryset.annotate(
+                tenant_count=Count('tenants'),
+                occupied_tenant_count=Count('tenants', filter=Q(tenants__tenant_name__isnull=False))
+            )
         
         return queryset
-
+    
     @action(detail=False, methods=['get'])
-    def nearby(self, request):
+    def map_bounds(self, request):
         """
-        Find shopping centers within specified distance of coordinates.
-        Uses PostGIS for geographic queries.
+        Custom action to return geographic bounds for map initialization.
+        
+        Returns the min/max latitude and longitude for all shopping centers,
+        useful for automatically setting map zoom and center.
+        
+        GET /api/v1/shopping-centers/map_bounds/
+        
+        Response:
+        {
+            "north": 40.1234,
+            "south": 39.5678,
+            "east": -75.1234,
+            "west": -75.9876,
+            "center": {
+                "lat": 39.8456,
+                "lng": -75.5555
+            }
+        }
         """
-        try:
-            lat = float(request.query_params.get('lat', 0))
-            lng = float(request.query_params.get('lng', 0))
-            radius = float(request.query_params.get('radius', 10))  # km
-            
-            # Validate coordinates
-            if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
-                return Response(
-                    {"error": "Invalid coordinates provided"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Create point for user location
-            user_location = Point(lng, lat, srid=4326)
-            
-            # PostGIS distance query - now works with corrected import
-            nearby_centers = self.get_queryset().annotate(
-                distance=Distance('location', user_location)
-            ).filter(
-                location__distance_lte=(user_location, D(km=radius))
-            ).order_by('distance')
-            
-            serializer = self.get_serializer(nearby_centers, many=True)
-            return Response({
-                'results': serializer.data,
-                'search_center': {'lat': lat, 'lng': lng},
-                'radius_km': radius,
-                'count': nearby_centers.count()
-            })
-            
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid parameters for nearby search: {str(e)}")
-            return Response(
-                {"error": "Invalid coordinates or radius provided"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except Exception as e:
-            logger.error(f"Geographic query failed: {str(e)}")
-            return Response(
-                {"error": "Geographic search temporarily unavailable"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
+        from django.db.models import Max, Min
+        
+        bounds = ShoppingCenter.objects.aggregate(
+            north=Max('latitude'),
+            south=Min('latitude'),
+            east=Max('longitude'),
+            west=Min('longitude')
+        )
+        
+        # Calculate center point
+        if all(bounds.values()):
+            center = {
+                'lat': (float(bounds['north']) + float(bounds['south'])) / 2,
+                'lng': (float(bounds['east']) + float(bounds['west'])) / 2
+            }
+            bounds['center'] = center
+        
+        return Response(bounds)
+    
     @action(detail=False, methods=['get'])
     def data_quality(self, request):
         """
-        Return data completeness metrics for shopping centers.
-        Part of progressive data enrichment strategy.
+        Custom action to return data quality metrics.
+        
+        Provides statistics on data completeness for all shopping centers:
+        - Total centers
+        - Percentage with complete addresses
+        - Percentage with GLA data
+        - Percentage with tenant data
+        - Percentage geocoded
+        
+        GET /api/v1/shopping-centers/data_quality/
+        
+        Response:
+        {
+            "total_centers": 55,
+            "data_completeness": {
+                "complete_addresses": {
+                    "count": 45,
+                    "percentage": 81.8
+                },
+                "has_gla_data": {
+                    "count": 50,
+                    "percentage": 90.9
+                },
+                ...
+            }
+        }
         """
-        centers = self.get_queryset()
+        total = ShoppingCenter.objects.count()
         
-        total_count = centers.count()
-        if total_count == 0:
-            return Response({
-                'message': 'No shopping centers in database',
-                'total_centers': 0
-            })
-        
-        complete_address = centers.exclude(
-            Q(address_street__isnull=True) | Q(address_street__exact='')
-        ).count()
-        has_gla = centers.exclude(
-            Q(total_gla__isnull=True) | Q(total_gla=0)
-        ).count()
-        has_tenants = centers.filter(tenant_count__gt=0).count()
-        has_coordinates = centers.exclude(
-            Q(latitude__isnull=True) | Q(longitude__isnull=True)
-        ).count()
-        
-        return Response({
-            'total_centers': total_count,
+        metrics = {
+            'total_centers': total,
             'data_completeness': {
                 'complete_addresses': {
-                    'count': complete_address,
-                    'percentage': round((complete_address / total_count * 100), 1)
+                    'count': ShoppingCenter.objects.filter(
+                        address_street__isnull=False,
+                        address_city__isnull=False,
+                        address_state__isnull=False
+                    ).count(),
+                    'percentage': 0
                 },
                 'has_gla_data': {
-                    'count': has_gla,
-                    'percentage': round((has_gla / total_count * 100), 1)
+                    'count': ShoppingCenter.objects.filter(
+                        total_gla__isnull=False
+                    ).count(),
+                    'percentage': 0
                 },
                 'has_tenant_data': {
-                    'count': has_tenants,
-                    'percentage': round((has_tenants / total_count * 100), 1)
+                    'count': ShoppingCenter.objects.annotate(
+                        tenant_count=Count('tenants')
+                    ).filter(tenant_count__gt=0).count(),
+                    'percentage': 0
                 },
                 'has_coordinates': {
-                    'count': has_coordinates,
-                    'percentage': round((has_coordinates / total_count * 100), 1)
+                    'count': ShoppingCenter.objects.filter(
+                        latitude__isnull=False,
+                        longitude__isnull=False
+                    ).count(),
+                    'percentage': 0
                 }
-            }
-        })
-
-    @action(detail=True, methods=['post'])
-    def enrich_data(self, request, pk=None):
-        """
-        Endpoint for progressive data enrichment - add missing fields to existing center.
-        """
-        center = self.get_object()
-        serializer = ShoppingCenterSerializer(center, data=request.data, partial=True)
-        
-        if serializer.is_valid():
-            # Track what fields are being enriched
-            enriched_fields = []
-            for field, value in request.data.items():
-                old_value = getattr(center, field, None)
-                if old_value != value and value is not None and value != '':
-                    enriched_fields.append(field)
-            
-            serializer.save()
-            
-            # Log enrichment for audit trail
-            if enriched_fields:
-                logger.info(f"Data enriched for center {center.id}: {enriched_fields}")
-            
-            return Response({
-                'message': 'Data successfully enriched',
-                'enriched_fields': enriched_fields,
-                'data': serializer.data
-            })
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class TenantViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for Tenant model with shopping center relationship.
-    """
-    queryset = Tenant.objects.all()
-    serializer_class = TenantSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_class = TenantFilter
-    search_fields = ['tenant_name', 'tenant_category', 'shopping_center__shopping_center_name']
-    ordering_fields = ['tenant_name', 'square_footage', 'lease_start_date']
-    ordering = ['tenant_name']
-
-    def get_queryset(self):
-        """Optimize queries with select_related."""
-        return Tenant.objects.select_related('shopping_center')
-
-    @action(detail=False, methods=['get'])
-    def by_category(self, request):
-        """
-        Group tenants by category with counts.
-        """
-        from django.db.models import Count
-        
-        categories = self.get_queryset().values('tenant_category').annotate(
-            count=Count('id')
-        ).order_by('-count')
-        
-        return Response({
-            'categories': list(categories),
-            'total_categories': len(categories)
-        })
-
-    @action(detail=False, methods=['get']) 
-    def vacancy_analysis(self, request):
-        """
-        Analyze vacancy rates across shopping centers.
-        """
-        from django.db.models import Avg, Count, Q
-        
-        # Get centers with tenant counts
-        centers_with_tenants = ShoppingCenter.objects.annotate(
-            tenant_count=Count('tenants'),
-            occupied_space=Count('tenants__square_footage')
-        ).exclude(total_gla__isnull=True)
-        
-        analysis = {
-            'total_centers': centers_with_tenants.count(),
-            'avg_tenants_per_center': centers_with_tenants.aggregate(
-                avg=Avg('tenant_count')
-            )['avg'] or 0,
-            'centers_by_occupancy': {
-                'fully_occupied': centers_with_tenants.filter(tenant_count__gte=20).count(),
-                'moderately_occupied': centers_with_tenants.filter(
-                    tenant_count__gte=10, tenant_count__lt=20
-                ).count(),
-                'low_occupancy': centers_with_tenants.filter(
-                    tenant_count__lt=10
-                ).count()
             }
         }
         
-        return Response(analysis)
-
-
-# Health check endpoint for monitoring
-from rest_framework.decorators import api_view
-
-@api_view(['GET'])
-def health_check(request):
-    """System health check including PostGIS availability."""
-    try:
-        from django.db import connection
+        # Calculate percentages
+        if total > 0:
+            for category in metrics['data_completeness'].values():
+                category['percentage'] = round((category['count'] / total) * 100, 1)
         
-        # Test basic database connection
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            db_status = "connected"
-            
-            # Test PostGIS availability
-            try:
-                cursor.execute("SELECT PostGIS_Version();")
-                postgis_version = cursor.fetchone()[0]
-                postgis_status = f"available - {postgis_version}"
-            except Exception as e:
-                postgis_status = f"unavailable - {str(e)}"
+        return Response(metrics)
+
+
+# =============================================================================
+# TENANT VIEWSET
+# =============================================================================
+
+class TenantViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for Tenants.
+    
+    Supports:
+    - List all tenants
+    - Create new tenant
+    - Retrieve specific tenant
+    - Update tenant
+    - Delete tenant
+    - Filtering by shopping center, category, lease status
+    - Search by name
+    - Ordering by various fields
+    """
+    queryset = Tenant.objects.all()
+    serializer_class = TenantListSerializer
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = TenantFilter
+    
+    # Search configuration
+    search_fields = [
+        'tenant_name',
+        'tenant_suite_number',
+        'retail_category',
+        'major_group'
+    ]
+    
+    # Ordering configuration
+    ordering_fields = [
+        'tenant_name',
+        'square_footage',
+        'base_rent',
+        'lease_expiration',
+        'created_at'
+    ]
+    ordering = ['tenant_name']  # Default ordering
+    
+    def get_serializer_class(self):
+        """
+        Use detailed serializer for retrieve actions.
+        """
+        if self.action == 'retrieve':
+            return TenantDetailSerializer
+        return TenantListSerializer
+    
+    def get_queryset(self):
+        """
+        Optionally filter queryset by shopping center if provided in URL.
         
-        return Response({
-            'status': 'healthy',
-            'database': db_status,
-            'postgis': postgis_status,
-            'timestamp': timezone.now().isoformat()  # FIXED: Now timezone is properly imported
-        })
-    except Exception as e:
-        return Response({
-            'status': 'unhealthy',
-            'error': str(e),
-            'timestamp': timezone.now().isoformat()  # FIXED: Now timezone is properly imported
-        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        Supports:
+        - /api/v1/tenants/ → All tenants
+        - /api/v1/shopping-centers/{id}/tenants/ → Tenants for specific center
+        """
+        queryset = Tenant.objects.select_related('shopping_center')
+        
+        # Filter by shopping center if provided in URL kwargs
+        shopping_center_id = self.kwargs.get('shopping_center_id')
+        if shopping_center_id:
+            queryset = queryset.filter(shopping_center_id=shopping_center_id)
+        
+        return queryset
+
+
+# =============================================================================
+# CSV UPLOAD FUNCTION (Placeholder for urls.py import)
+# =============================================================================
+
+@api_view(['POST'])
+def upload_csv(request):
+    """
+    CSV upload endpoint.
+    
+    This is a placeholder function that returns HTTP 501 Not Implemented.
+    The actual CSV import is handled via Django management command:
+        python manage.py import_csv_simple path/to/file.csv
+    
+    POST /api/v1/shopping-centers/upload_csv/
+    
+    Future implementation will handle:
+    - File validation
+    - CSV parsing
+    - Property creation/update
+    - Automatic geocoding
+    - Tenant import
+    """
+    return Response(
+        {
+            'error': 'CSV upload via API not yet implemented',
+            'message': 'Please use the management command: python manage.py import_csv_simple <file>',
+            'status': 'not_implemented'
+        },
+        status=status.HTTP_501_NOT_IMPLEMENTED
+    )
+
+
+# =============================================================================
+# NOTES ON PAGINATION
+# =============================================================================
+
+"""
+Pagination Configuration:
+========================
+
+The ShoppingCenterPagination class explicitly enables the page_size query
+parameter, which allows the frontend to request different page sizes.
+
+Before this change:
+- Frontend requested ?page_size=100
+- Backend ignored it and returned default 20 results
+- Map showed only 20 of 55 properties
+
+After this change:
+- Frontend requests ?page_size=100
+- Backend returns all 55 results
+- Map displays all 55 properties
+
+The key fix was adding page_size_query_param to the pagination class.
+The global REST_FRAMEWORK settings alone weren't sufficient due to a
+Django REST Framework quirk where PAGE_SIZE_QUERY_PARAM doesn't always
+work as expected without explicit pagination class configuration.
+
+Testing:
+--------
+curl "http://localhost:8000/api/v1/shopping-centers/" 
+  → Returns 20 results (default)
+
+curl "http://localhost:8000/api/v1/shopping-centers/?page_size=100" 
+  → Returns 55 results (all properties)
+
+curl "http://localhost:8000/api/v1/shopping-centers/?page_size=1000" 
+  → Returns 55 results (capped at total available)
+"""

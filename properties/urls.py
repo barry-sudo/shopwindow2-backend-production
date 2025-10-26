@@ -15,6 +15,7 @@ Shopping Center Endpoints:
 - /{id}/geocode/                      - Manual geocoding (POST)
 - /{id}/nearby/                       - Spatial queries (GET)
 - /{id}/tenants/                      - Tenant management for specific center (GET, POST)
+- /upload-csv/                        - CSV import endpoint (POST) [NEW: Oct 11, 2025]
 
 Tenant Endpoints:
 - /tenants/                           - All tenants list/create (GET, POST)
@@ -28,13 +29,14 @@ This URLs file gets included by the main project URLs at:
 Full API paths will be:
 /api/v1/shopping-centers/              -> ShoppingCenterViewSet
 /api/v1/shopping-centers/tenants/      -> TenantViewSet
+/api/v1/shopping-centers/upload-csv/   -> CSV Upload Endpoint
 """
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.urlpatterns import format_suffix_patterns
 
-from .views import ShoppingCenterViewSet, TenantViewSet
+from .views import ShoppingCenterViewSet, TenantViewSet, upload_csv
 
 
 # =============================================================================
@@ -81,13 +83,22 @@ router.register(r'tenants', TenantViewSet, basename='tenant')
 # =============================================================================
 
 urlpatterns = [
-    # Include all router-generated URLs
+    # CRITICAL: Explicit paths MUST come BEFORE router include
+    # The router at '' will match ANY path pattern, so specific paths like
+    # 'upload-csv/' must be registered first or they'll be caught by the router
+    # and interpreted as primary keys (causing 405 Method Not Allowed errors)
+    
+    # CSV Upload endpoint (added Oct 11, 2025) - MUST BE FIRST
+    path('upload-csv/', upload_csv, name='upload-csv'),
+    
+    # Router LAST - catches all other patterns
     path('', include(router.urls)),
 ]
 
 # Apply format suffix patterns for content negotiation
 # Allows URLs like /api/v1/shopping-centers/1.json or /api/v1/shopping-centers/1.xml
-urlpatterns = format_suffix_patterns(urlpatterns)
+# Format suffixes already handled by DRF router
+# urlpatterns = format_suffix_patterns(urlpatterns)
 
 
 # =============================================================================
@@ -175,6 +186,30 @@ SHOPPING CENTER ENDPOINTS:
    - expiring_soon: true - show leases expiring within 12 months
    - ordering: Sort by tenant_name, tenant_suite_number, square_footage, base_rent
 
+8. CSV Upload (NEW: Oct 11, 2025)
+   POST /api/v1/shopping-centers/upload-csv/
+   
+   Request:
+   - Content-Type: multipart/form-data
+   - Body: file (CSV file)
+   
+   Response:
+   {
+       "success": true,
+       "stats": {
+           "shopping_centers_imported": 5,
+           "tenants_imported": 47,
+           "fields_updated": 234,
+           "errors": []
+       },
+       "timestamp": "2025-10-11T14:30:00Z"
+   }
+   
+   Validation:
+   - File must be .csv extension
+   - Maximum file size: 10MB
+   - Uses UTF-8 or Latin-1 encoding
+
 
 TENANT ENDPOINTS:
 -----------------
@@ -231,6 +266,7 @@ Shopping Centers:
 - 'shopping-center-geocode'
 - 'shopping-center-nearby'
 - 'shopping-center-tenants'
+- 'upload-csv' [NEW]
 
 Tenants:
 - 'tenant-list'
@@ -241,6 +277,7 @@ Tenants:
 Usage:
 from django.urls import reverse
 url = reverse('shopping-center-detail', kwargs={'pk': 1})
+url = reverse('upload-csv')
 
 Usage in DRF:
 from rest_framework.reverse import reverse
@@ -273,6 +310,10 @@ curl http://localhost:8000/api/v1/shopping-centers/1/
 curl http://localhost:8000/api/v1/shopping-centers/statistics/
 curl http://localhost:8000/api/v1/shopping-centers/tenants/
 curl http://localhost:8000/api/v1/shopping-centers/tenants/chains/
+
+# Test CSV upload (NEW)
+curl -X POST http://localhost:8000/api/v1/shopping-centers/upload-csv/ \
+  -F "file=@path/to/your/data.csv"
 
 # Test filtering
 curl "http://localhost:8000/api/v1/shopping-centers/?address_city=Chester"

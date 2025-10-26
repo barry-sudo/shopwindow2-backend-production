@@ -40,6 +40,9 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     '.render.com',
     '.onrender.com',
+    'api.shopwindow.cloud',
+    'shopwindow.cloud',
+    'www.shopwindow.cloud',
 ]
 
 # Override from environment variable if provided
@@ -143,10 +146,7 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD', ''),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '5432'),
-        'OPTIONS': {
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-        },
-        'CONN_MAX_AGE': 600,  # Connection pooling
+        'CONN_MAX_AGE': 600,
     }
 }
 
@@ -196,10 +196,12 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
+        'rest_framework.permissions.AllowAny',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'PAGE_SIZE_QUERY_PARAM': 'page_size',
+    'MAX_PAGE_SIZE': 1000,
     'DEFAULT_FILTER_BACKENDS': [
         'django_filters.rest_framework.DjangoFilterBackend',
         'rest_framework.filters.SearchFilter',
@@ -235,9 +237,19 @@ SIMPLE_JWT = {
 # =============================================================================
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React development
+    # Local development
+    "http://localhost:3000",
+    "http://localhost:5173",
     "http://127.0.0.1:3000",
-    "https://shopwindow-frontend.onrender.com",  # Production frontend
+    "http://127.0.0.1:5173",
+
+    # Render default URLs
+    "https://shopwindow2-frontend-production.onrender.com",
+    "https://shopwindow-frontend.onrender.com",
+
+    # Production - Custom Domain
+    "https://shopwindow.cloud",
+    "https://www.shopwindow.cloud",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -259,3 +271,25 @@ CORS_ALLOWED_HEADERS = [
 # =============================================================================
 
 LANGUAGE_CODE = 'en-us'
+
+TIME_ZONE = 'America/New_York'
+
+USE_I18N = True
+
+USE_TZ = True
+
+# =============================================================================
+# STATIC FILES (CSS, JavaScript, Images)
+# =============================================================================
+
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Whitenoise configuration for serving static files in production
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# =============================================================================
+# DEFAULT PRIMARY KEY FIELD TYPE
+# =============================================================================
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

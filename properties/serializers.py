@@ -1,25 +1,17 @@
 """
-API Serializers for Shop Window Properties.
+API Serializers for Shop Window Properties - CLEANED VERSION.
 
 This module defines the serialization layer between Django models and REST API.
-Implements different serializer classes for different API use cases:
-- List views (summary data for maps and tables)
-- Detail views (complete property information)
-- Create/Update views (input validation and processing)
+Only includes fields that actually exist in the models.
 
-Key Features:
-- Progressive data enrichment support
-- Spatial data serialization (coordinates)
-- Business logic integration (quality scores, vacancy rates)
-- Input validation with meaningful error messages
-- Computed fields for frontend display
+Updated: 2025-10-14 to add annual_rent calculated field
+Updated: 2025-10-22 to add avg_base_rent_psf to ShoppingCenterListSerializer
 """
 
 from rest_framework import serializers
-from rest_framework.validators import UniqueValidator
 from django.contrib.gis.geos import Point
-from decimal import Decimal, InvalidOperation
-from datetime import date, datetime
+from django.db.models import Avg, Q
+from datetime import date
 import re
 import logging
 
@@ -35,13 +27,11 @@ logger = logging.getLogger(__name__)
 class TenantListSerializer(serializers.ModelSerializer):
     """
     Simplified tenant serializer for list views and nested shopping center details.
-    
-    Used when displaying tenants within shopping center details or
-    for tenant list endpoints where full detail isn't needed.
     """
     
     # Computed fields
     rent_per_sq_ft = serializers.SerializerMethodField()
+    annual_rent = serializers.SerializerMethodField()
     lease_status = serializers.SerializerMethodField()
     is_lease_expiring_soon = serializers.SerializerMethodField()
     
@@ -54,19 +44,24 @@ class TenantListSerializer(serializers.ModelSerializer):
             'square_footage',
             'retail_category',
             'ownership_type',
-            'occupancy_status',
-            'is_anchor',
             'base_rent',
+            'lease_commence',
             'lease_expiration',
             'rent_per_sq_ft',
+            'annual_rent',
             'lease_status',
             'is_lease_expiring_soon',
+            'major_group',
         ]
-        read_only_fields = ['id', 'rent_per_sq_ft', 'lease_status', 'is_lease_expiring_soon']
+        read_only_fields = ['id', 'rent_per_sq_ft', 'annual_rent', 'lease_status', 'is_lease_expiring_soon']
     
     def get_rent_per_sq_ft(self, obj):
-        """Calculate rent per square foot."""
+        """Return annual rent per square foot."""
         return obj.get_rent_per_sq_ft()
+    
+    def get_annual_rent(self, obj):
+        """Calculate total annual rent."""
+        return obj.get_annual_rent()
     
     def get_lease_status(self, obj):
         """Get current lease status."""
@@ -80,13 +75,11 @@ class TenantListSerializer(serializers.ModelSerializer):
 class TenantDetailSerializer(serializers.ModelSerializer):
     """
     Complete tenant serializer with all fields and computed properties.
-    
-    Used for individual tenant detail views and tenant management operations.
-    Includes validation for business rules and data quality.
     """
     
     # Computed fields
     rent_per_sq_ft = serializers.SerializerMethodField()
+    annual_rent = serializers.SerializerMethodField()
     lease_status = serializers.SerializerMethodField()
     is_lease_expiring_soon = serializers.SerializerMethodField()
     shopping_center_name = serializers.CharField(source='shopping_center.shopping_center_name', read_only=True)
@@ -107,22 +100,26 @@ class TenantDetailSerializer(serializers.ModelSerializer):
             'lease_commence',
             'lease_expiration',
             'credit_category',
-            'is_anchor',
-            'occupancy_status',
             'rent_per_sq_ft',
+            'annual_rent',
             'lease_status',
             'is_lease_expiring_soon',
             'created_at',
             'updated_at',
+            'major_group',
         ]
         read_only_fields = [
-            'id', 'shopping_center_name', 'rent_per_sq_ft', 'lease_status',
+            'id', 'shopping_center_name', 'rent_per_sq_ft', 'annual_rent', 'lease_status',
             'is_lease_expiring_soon', 'created_at', 'updated_at'
         ]
     
     def get_rent_per_sq_ft(self, obj):
-        """Calculate rent per square foot."""
+        """Return annual rent per square foot."""
         return obj.get_rent_per_sq_ft()
+    
+    def get_annual_rent(self, obj):
+        """Calculate total annual rent."""
+        return obj.get_annual_rent()
     
     def get_lease_status(self, obj):
         """Get current lease status."""
@@ -149,14 +146,9 @@ class TenantDetailSerializer(serializers.ModelSerializer):
         square_footage = data.get('square_footage')
         
         if base_rent and square_footage:
-            rent_per_sf = float(base_rent) / square_footage
-            if rent_per_sf > 1000:  # Sanity check: $1000/sf is extremely high
+            # base_rent is now $/SF/year, so sanity check is simpler
+            if base_rent > 500:  # $500/SF/year is extremely high for retail
                 errors['base_rent'] = "Rent per square foot appears unusually high. Please verify."
-        
-        # Validate retail categories
-        retail_category = data.get('retail_category', [])
-        if retail_category and len(retail_category) > 5:
-            errors['retail_category'] = "Maximum 5 retail categories allowed."
         
         if errors:
             raise serializers.ValidationError(errors)
@@ -167,9 +159,6 @@ class TenantDetailSerializer(serializers.ModelSerializer):
 class TenantCreateSerializer(serializers.ModelSerializer):
     """
     Tenant creation serializer with input validation.
-    
-    Used for creating new tenant records with proper validation
-    and business rule enforcement.
     """
     
     class Meta:
@@ -186,8 +175,7 @@ class TenantCreateSerializer(serializers.ModelSerializer):
             'lease_commence',
             'lease_expiration',
             'credit_category',
-            'is_anchor',
-            'occupancy_status',
+            'major_group',
         ]
     
     def validate_tenant_name(self, value):
@@ -195,7 +183,6 @@ class TenantCreateSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError("Tenant name cannot be empty.")
         
-        # Clean up the name
         cleaned_name = value.strip()
         if len(cleaned_name) < 2:
             raise serializers.ValidationError("Tenant name must be at least 2 characters.")
@@ -207,15 +194,18 @@ class TenantCreateSerializer(serializers.ModelSerializer):
         if value is not None and value <= 0:
             raise serializers.ValidationError("Square footage must be positive.")
         
-        if value is not None and value > 1000000:  # 1M sq ft sanity check
+        if value is not None and value > 1000000:
             raise serializers.ValidationError("Square footage seems unusually large.")
         
         return value
     
     def validate_base_rent(self, value):
-        """Validate base rent."""
+        """Validate base rent (annual $/SF)."""
         if value is not None and value < 0:
             raise serializers.ValidationError("Base rent cannot be negative.")
+        
+        if value is not None and value > 500:
+            raise serializers.ValidationError("Base rent per SF seems unusually high (over $500/SF/year).")
         
         return value
 
@@ -230,13 +220,15 @@ class ShoppingCenterListSerializer(serializers.ModelSerializer):
     
     Optimized for performance with minimal data transfer.
     Includes key fields needed for map markers and property cards.
+    
+    Updated: 2025-10-22 to add avg_base_rent_psf for LeanDashboard display
     """
     
     # Computed fields for frontend display
     tenant_count = serializers.SerializerMethodField()
     vacancy_rate = serializers.SerializerMethodField()
     full_address = serializers.SerializerMethodField()
-    center_type_display = serializers.CharField(source='get_center_type_display', read_only=True)
+    avg_base_rent_psf = serializers.SerializerMethodField()  # NEW - Added for LeanDashboard
     
     class Meta:
         model = ShoppingCenter
@@ -246,46 +238,82 @@ class ShoppingCenterListSerializer(serializers.ModelSerializer):
             'address_city',
             'address_state',
             'address_zip',
-            'center_type',
-            'center_type_display',
-            'total_gla',
-            'calculated_gla',
-            'latitude',
-            'longitude', 
-            'data_quality_score',
-            'tenant_count',
-            'vacancy_rate',
+            'address_street',
             'full_address',
+            'latitude',
+            'longitude',
+            'center_type',
+            'total_gla',
+            'year_built',
             'owner',
             'property_manager',
+            'county',
+            'municipality',
+            'tenant_count',
+            'vacancy_rate',
+            'avg_base_rent_psf',  # NEW - Added to fields list
+            'created_at',
+            'updated_at',
         ]
-        read_only_fields = [
-            'id', 'center_type_display', 'tenant_count', 'vacancy_rate', 
-            'full_address', 'calculated_gla', 'data_quality_score'
-        ]
+        read_only_fields = ['id', 'tenant_count', 'vacancy_rate', 'full_address', 'avg_base_rent_psf', 'created_at', 'updated_at']
     
     def get_tenant_count(self, obj):
         """Get total number of tenants."""
         return obj.get_tenant_count()
     
     def get_vacancy_rate(self, obj):
-        """Get vacancy rate as percentage."""
+        """Calculate vacancy rate as percentage."""
         return obj.get_vacancy_rate()
     
     def get_full_address(self, obj):
         """Get formatted full address."""
         return obj.get_full_address()
+    
+    def get_avg_base_rent_psf(self, obj):
+        """
+        Calculate average base rent per square foot across all occupied tenants.
+        
+        Logic:
+        - Filters out vacant units (tenant_name='Vacant')
+        - Only includes tenants with valid base_rent data (not null, > 0)
+        - Averages the base_rent field (which is already $/SF/year per models.py)
+        - Returns None if no valid rent data exists
+        
+        Returns:
+            float: Average rent per SF per year, or None if no data
+            
+        Example:
+            Tenant 1: $25/SF, Tenant 2: $30/SF, Tenant 3: Vacant
+            Returns: 27.50
+        """
+        # Query tenants with valid rent data, excluding vacant units
+        tenants_with_rent = obj.tenants.filter(
+            base_rent__isnull=False,
+            base_rent__gt=0
+        ).exclude(
+            tenant_name='Vacant'
+        )
+        
+        # Return None if no valid rent data
+        if not tenants_with_rent.exists():
+            return None
+        
+        # Calculate average using Django's Avg aggregation
+        avg_rent = tenants_with_rent.aggregate(avg=Avg('base_rent'))['avg']
+        
+        # Return as float rounded to 2 decimal places, or None if aggregation fails
+        return round(float(avg_rent), 2) if avg_rent else None
 
 
 class ShoppingCenterDetailSerializer(serializers.ModelSerializer):
     """
-    Complete shopping center serializer with all fields and related data.
+    Complete shopping center serializer with nested tenants.
     
-    Used for individual property detail views with full tenant listings
-    and comprehensive property information.
+    Used for property detail pages with full tenant information.
+    Includes all computed metrics.
     """
     
-    # Related data
+    # Nested relationships
     tenants = TenantListSerializer(many=True, read_only=True)
     
     # Computed fields
@@ -293,10 +321,7 @@ class ShoppingCenterDetailSerializer(serializers.ModelSerializer):
     occupied_tenant_count = serializers.SerializerMethodField()
     vacancy_rate = serializers.SerializerMethodField()
     full_address = serializers.SerializerMethodField()
-    center_type_display = serializers.CharField(source='get_center_type_display', read_only=True)
-    
-    # Coordinate fields (for frontend mapping)
-    coordinates = serializers.SerializerMethodField()
+    avg_base_rent_psf = serializers.SerializerMethodField()  # Added for consistency
     
     class Meta:
         model = ShoppingCenter
@@ -304,40 +329,33 @@ class ShoppingCenterDetailSerializer(serializers.ModelSerializer):
             'id',
             'shopping_center_name',
             'address_street',
-            'address_city', 
+            'address_city',
             'address_state',
             'address_zip',
-            'contact_name',
-            'contact_phone',
-            'total_gla',
-            'calculated_gla',
-            'center_type',
-            'center_type_display',
-            'latitude',
-            'longitude',
-            'coordinates',
+            'full_address',
             'county',
             'municipality',
             'zoning_authority',
+            'latitude',
+            'longitude',
+            'center_type',
+            'total_gla',
             'year_built',
             'owner',
             'property_manager',
             'leasing_agent',
             'leasing_brokerage',
-            'data_quality_score',
             'tenant_count',
             'occupied_tenant_count',
             'vacancy_rate',
-            'full_address',
+            'avg_base_rent_psf',
             'tenants',
-            'import_batch',
             'created_at',
             'updated_at',
         ]
         read_only_fields = [
-            'id', 'center_type_display', 'calculated_gla', 'latitude', 'longitude',
-            'coordinates', 'data_quality_score', 'tenant_count', 'occupied_tenant_count',
-            'vacancy_rate', 'full_address', 'tenants', 'created_at', 'updated_at'
+            'id', 'tenant_count', 'occupied_tenant_count', 'vacancy_rate',
+            'full_address', 'avg_base_rent_psf', 'created_at', 'updated_at'
         ]
     
     def get_tenant_count(self, obj):
@@ -349,29 +367,41 @@ class ShoppingCenterDetailSerializer(serializers.ModelSerializer):
         return obj.get_occupied_tenant_count()
     
     def get_vacancy_rate(self, obj):
-        """Get vacancy rate as percentage."""
+        """Calculate vacancy rate as percentage."""
         return obj.get_vacancy_rate()
     
     def get_full_address(self, obj):
         """Get formatted full address."""
         return obj.get_full_address()
     
-    def get_coordinates(self, obj):
-        """Get coordinates as [longitude, latitude] array for mapping."""
-        if obj.latitude and obj.longitude:
-            return [float(obj.longitude), float(obj.latitude)]
-        return None
+    def get_avg_base_rent_psf(self, obj):
+        """
+        Calculate average base rent per square foot.
+        Same logic as ShoppingCenterListSerializer.
+        """
+        tenants_with_rent = obj.tenants.filter(
+            base_rent__isnull=False,
+            base_rent__gt=0
+        ).exclude(
+            tenant_name='Vacant'
+        )
+        
+        if not tenants_with_rent.exists():
+            return None
+        
+        avg_rent = tenants_with_rent.aggregate(avg=Avg('base_rent'))['avg']
+        return round(float(avg_rent), 2) if avg_rent else None
 
 
 class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
     """
-    Shopping center creation serializer with validation and business logic.
+    Shopping center creation serializer for POST operations.
     
-    Handles new property creation with input validation, geocoding triggers,
-    and progressive data enrichment setup.
+    Supports progressive data enrichment - only shopping_center_name required.
+    Handles geocoding and validation logic.
     """
     
-    # Optional coordinate override (if user provides exact coordinates)
+    # Optional override for manual coordinate entry
     override_coordinates = serializers.BooleanField(write_only=True, required=False, default=False)
     manual_latitude = serializers.DecimalField(
         max_digits=10, decimal_places=7, write_only=True, required=False, allow_null=True
@@ -386,11 +416,10 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
             'shopping_center_name',
             'address_street',
             'address_city',
-            'address_state', 
+            'address_state',
             'address_zip',
-            'contact_name',
-            'contact_phone',
             'total_gla',
+            'center_type',
             'county',
             'municipality',
             'zoning_authority',
@@ -409,15 +438,13 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError("Shopping center name is required.")
         
-        # Clean the name
         cleaned_name = value.strip()
         
-        # Check for uniqueness (case-insensitive)
         if ShoppingCenter.objects.filter(
             shopping_center_name__iexact=cleaned_name
         ).exists():
             raise serializers.ValidationError(
-                f"Shopping center '{cleaned_name}' already exists. Shopping center names must be unique."
+                f"Shopping center '{cleaned_name}' already exists."
             )
         
         return cleaned_name
@@ -433,16 +460,13 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
     def validate_address_zip(self, value):
         """Validate ZIP code format."""
         if value:
-            # Remove any spaces or dashes
             cleaned_zip = re.sub(r'[^0-9]', '', value)
             
-            # Validate format (5 or 9 digits)
             if not re.match(r'^\d{5}(\d{4})?$', cleaned_zip):
                 raise serializers.ValidationError(
-                    "ZIP code must be 5 digits (e.g., '19382') or 9 digits (e.g., '193820000')."
+                    "ZIP code must be 5 digits (e.g., '19382') or 9 digits."
                 )
             
-            # Format consistently
             if len(cleaned_zip) == 9:
                 return f"{cleaned_zip[:5]}-{cleaned_zip[5:]}"
             return cleaned_zip
@@ -455,7 +479,7 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
             if value <= 0:
                 raise serializers.ValidationError("Total GLA must be positive.")
             
-            if value > 10000000:  # 10M sq ft sanity check
+            if value > 10000000:
                 raise serializers.ValidationError("Total GLA seems unusually large.")
         
         return value
@@ -475,7 +499,6 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
         """Cross-field validation."""
         errors = {}
         
-        # Validate manual coordinates if provided
         override_coords = data.get('override_coordinates', False)
         manual_lat = data.get('manual_latitude')
         manual_lng = data.get('manual_longitude')
@@ -483,28 +506,14 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
         if override_coords:
             if manual_lat is None or manual_lng is None:
                 errors['override_coordinates'] = (
-                    "Both manual_latitude and manual_longitude must be provided "
-                    "when override_coordinates is True."
+                    "Both manual_latitude and manual_longitude required."
                 )
             else:
-                # Validate coordinate ranges
                 if not (-90 <= manual_lat <= 90):
                     errors['manual_latitude'] = "Latitude must be between -90 and 90."
                 
                 if not (-180 <= manual_lng <= 180):
                     errors['manual_longitude'] = "Longitude must be between -180 and 180."
-        
-        # Validate address completeness for geocoding
-        address_fields = [
-            data.get('address_street'),
-            data.get('address_city'), 
-            data.get('address_state')
-        ]
-        
-        if not override_coords and not any(address_fields):
-            errors['address'] = (
-                "Either provide address components for geocoding or use manual coordinates."
-            )
         
         if errors:
             raise serializers.ValidationError(errors)
@@ -513,22 +522,17 @@ class ShoppingCenterCreateSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         """Create shopping center with business logic."""
-        # Extract coordinate override data
         override_coordinates = validated_data.pop('override_coordinates', False)
         manual_latitude = validated_data.pop('manual_latitude', None)
         manual_longitude = validated_data.pop('manual_longitude', None)
         
-        # Create the shopping center
         shopping_center = ShoppingCenter.objects.create(**validated_data)
         
-        # Handle coordinate setting
         if override_coordinates and manual_latitude and manual_longitude:
             shopping_center.latitude = manual_latitude
             shopping_center.longitude = manual_longitude
-            shopping_center.location = Point(float(manual_longitude), float(manual_latitude))
             shopping_center.save()
         else:
-            # Trigger geocoding (this would be handled by a signal or service)
             try:
                 from services.geocoding import GeocodingService
                 geocoding_service = GeocodingService()
@@ -544,7 +548,6 @@ class ShoppingCenterUpdateSerializer(serializers.ModelSerializer):
     Shopping center update serializer for PATCH operations.
     
     Supports progressive data enrichment with validation.
-    Prevents overwriting existing data with empty values.
     """
     
     class Meta:
@@ -554,9 +557,8 @@ class ShoppingCenterUpdateSerializer(serializers.ModelSerializer):
             'address_city',
             'address_state',
             'address_zip',
-            'contact_name',
-            'contact_phone',
             'total_gla',
+            'center_type',
             'county',
             'municipality',
             'zoning_authority',
@@ -566,29 +568,23 @@ class ShoppingCenterUpdateSerializer(serializers.ModelSerializer):
             'leasing_agent',
             'leasing_brokerage',
         ]
-        # Note: shopping_center_name is intentionally excluded to prevent accidental changes
     
     def validate_address_state(self, value):
         """Validate state code format."""
         if value:
             if len(value) != 2:
-                raise serializers.ValidationError("State must be a 2-letter code (e.g., 'PA').")
+                raise serializers.ValidationError("State must be a 2-letter code.")
             return value.upper()
         return value
     
     def validate_address_zip(self, value):
         """Validate ZIP code format."""
         if value:
-            # Remove any spaces or dashes
             cleaned_zip = re.sub(r'[^0-9]', '', value)
             
-            # Validate format (5 or 9 digits)
             if not re.match(r'^\d{5}(\d{4})?$', cleaned_zip):
-                raise serializers.ValidationError(
-                    "ZIP code must be 5 digits (e.g., '19382') or 9 digits (e.g., '193820000')."
-                )
+                raise serializers.ValidationError("ZIP code must be 5 digits or 9 digits.")
             
-            # Format consistently
             if len(cleaned_zip) == 9:
                 return f"{cleaned_zip[:5]}-{cleaned_zip[5:]}"
             return cleaned_zip
@@ -596,19 +592,13 @@ class ShoppingCenterUpdateSerializer(serializers.ModelSerializer):
         return value
     
     def update(self, instance, validated_data):
-        """
-        Update with progressive data enrichment logic.
-        
-        Only updates fields that have values - preserves existing data.
-        """
-        # Progressive enrichment: don't overwrite with empty values
+        """Update with progressive data enrichment logic."""
         for field, value in validated_data.items():
             if value is not None and value != '':
                 setattr(instance, field, value)
         
         instance.save()
         
-        # Trigger re-geocoding if address changed
         address_fields = ['address_street', 'address_city', 'address_state', 'address_zip']
         if any(field in validated_data for field in address_fields):
             try:
@@ -616,7 +606,7 @@ class ShoppingCenterUpdateSerializer(serializers.ModelSerializer):
                 geocoding_service = GeocodingService()
                 geocoding_service.geocode_shopping_center(instance)
             except Exception as e:
-                logger.warning(f"Re-geocoding failed for {instance.shopping_center_name}: {str(e)}")
+                logger.warning(f"Re-geocoding failed: {str(e)}")
         
         return instance
 
@@ -628,9 +618,6 @@ class ShoppingCenterUpdateSerializer(serializers.ModelSerializer):
 class ShoppingCenterMapSerializer(serializers.ModelSerializer):
     """
     Minimal serializer optimized for map displays.
-    
-    Only includes essential data for map markers and popups.
-    Designed for high-performance bulk queries.
     """
     
     coordinates = serializers.SerializerMethodField()
@@ -665,45 +652,3 @@ class ShoppingCenterMapSerializer(serializers.ModelSerializer):
             'gla': f"{obj.total_gla:,}" if obj.total_gla else 'Unknown',
             'tenant_count': obj.get_tenant_count(),
         }
-
-
-class ShoppingCenterStatsSerializer(serializers.Serializer):
-    """
-    Statistics serializer for dashboard and analytics.
-    
-    Provides aggregated data about shopping centers and tenants.
-    """
-    
-    total_shopping_centers = serializers.IntegerField()
-    total_tenants = serializers.IntegerField()
-    total_gla = serializers.IntegerField()
-    average_quality_score = serializers.FloatField()
-    centers_by_type = serializers.DictField()
-    top_owners = serializers.ListField()
-    recent_additions = serializers.IntegerField()
-    geocoded_percentage = serializers.FloatField()
-
-
-# =============================================================================
-# ERROR HANDLING
-# =============================================================================
-
-def get_validation_error_message(field_errors):
-    """
-    Convert DRF validation errors to user-friendly messages.
-    
-    Args:
-        field_errors: Dict of field validation errors
-        
-    Returns:
-        Dict with cleaned error messages
-    """
-    cleaned_errors = {}
-    
-    for field, errors in field_errors.items():
-        if isinstance(errors, list):
-            cleaned_errors[field] = '. '.join(errors)
-        else:
-            cleaned_errors[field] = str(errors)
-    
-    return cleaned_errors

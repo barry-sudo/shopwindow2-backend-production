@@ -1,0 +1,261 @@
+# Shop Window Backend - Git Ignore File
+# Prevents sensitive and unnecessary files from being committed to GitHub
+
+# =============================================================================
+# ENVIRONMENT & SECRETS (CRITICAL - NEVER COMMIT)
+# =============================================================================
+
+# Environment variables - contains API keys and database credentials
+.env
+.env.local
+.env.production
+.env.*.local
+*.env
+
+# Django secret key file (if separate)
+secret_key.txt
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# =============================================================================
+# DJANGO
+# =============================================================================
+
+# Django stuff
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Static files (collected in production)
+/static/
+/staticfiles/
+/media/
+
+# Django migrations (keep in git but can ignore if needed)
+# Uncomment to ignore migrations:
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+
+# SQLite databases
+*.sqlite3
+*.db
+
+# PostgreSQL dumps
+*.sql
+*.dump
+pg_dump_*
+
+# Database backup files
+*.backup
+*.bak
+
+# =============================================================================
+# IDE & EDITORS
+# =============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Thumbnails
+Thumbs.db
+
+# =============================================================================
+# LOGS & TEMPORARY FILES
+# =============================================================================
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# =============================================================================
+# DATA FILES (Sensitive or Large)
+# =============================================================================
+
+# CSV files with sensitive data (uncomment if needed)
+# *.csv
+
+# Excel files with sensitive data (uncomment if needed)
+# *.xlsx
+# *.xls
+
+# Exclude master database but allow test files
+masterdatabase.csv
+*_production.csv
+
+# PDF documents with sensitive information
+# *.pdf
+
+# Backup files
+*.backup
+*.old
+
+# =============================================================================
+# RENDER DEPLOYMENT
+# =============================================================================
+
+# Render build artifacts
+.render/
+
+# Collected static files (generated during build)
+staticfiles/
+static_root/
+
+# =============================================================================
+# TESTING & DEBUGGING
+# =============================================================================
+
+# Test output
+.pytest_cache/
+test-results/
+test_*.py
+
+# Debug toolbar
+debug/
+
+# =============================================================================
+# DOCUMENTATION (Optional - keep docs in git)
+# =============================================================================
+
+# Uncomment to ignore documentation builds
+# docs/_build/
+# site/
+
+# =============================================================================
+# SECURITY SCANS
+# =============================================================================
+
+# Security scan reports
+security-report.txt
+vulnerability-report.json
+
+# =============================================================================
+# PACKAGE MANAGERS
+# =============================================================================
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Poetry
+poetry.lock
+
+# Pipenv
+Pipfile.lock
+
+# =============================================================================
+# MISCELLANEOUS
+# =============================================================================
+
+# Redis dump
+dump.rdb
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Node modules (if any frontend build in Django)
+node_modules/
+
+# Environment info
+requirements_temp.txt

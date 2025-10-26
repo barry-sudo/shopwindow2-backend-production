@@ -8,7 +8,7 @@ import uuid
 from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.contrib.postgres.fields import JSONField
+from django.db.models import JSONField
 from django.utils import timezone
 
 
@@ -38,6 +38,7 @@ class ImportBatch(models.Model):
         ('pending', 'Pending'),
         ('processing', 'Processing'),
         ('completed', 'Completed'),
+        ('completed_with_errors', 'Completed With Errors'),
         ('failed', 'Failed'),
         ('cancelled', 'Cancelled'),
     ]
@@ -67,7 +68,7 @@ class ImportBatch(models.Model):
         help_text="Type of import operation"
     )
     status = models.CharField(
-        max_length=20, 
+        max_length=30, 
         choices=STATUS_CHOICES, 
         default='pending',
         db_index=True,

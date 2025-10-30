@@ -40,9 +40,6 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     '.render.com',
     '.onrender.com',
-    'api.shopwindow.cloud',
-    'shopwindow.cloud',
-    'www.shopwindow.cloud',
 ]
 
 # Override from environment variable if provided
@@ -243,11 +240,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
 
-    # Render default URLs
-    "https://shopwindow2-frontend-production.onrender.com",
-    "https://shopwindow-frontend.onrender.com",
+    # Render production URLs
+    "https://shopwindow2-frontend-production.onrender.com",  # CRITICAL: Actual frontend URL
+    "https://shopwindow-frontend.onrender.com",  # Backup/staging URL
 
-    # Production - Custom Domain
+    # Production custom domain
     "https://shopwindow.cloud",
     "https://www.shopwindow.cloud",
 ]
